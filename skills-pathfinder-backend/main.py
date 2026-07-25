@@ -8,7 +8,6 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 from dotenv import load_dotenv
-import httpx
 from PyPDF2 import PdfReader
 import pytesseract
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
@@ -118,7 +117,7 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
     try:
         doc = docx.Document(io.BytesIO(file_bytes))
         return "\n".join([para.text for para in doc.paragraphs])
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid or corrupted DOCX file.")
 
 def extract_text_from_image(file_bytes: bytes) -> str:
@@ -127,7 +126,7 @@ def extract_text_from_image(file_bytes: bytes) -> str:
         image = Image.open(io.BytesIO(file_bytes))
         image = image.convert("L") # Convert to grayscale for better OCR accuracy
         return pytesseract.image_to_string(image)
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid or corrupted image file.")
 
 # ==========================================
@@ -168,13 +167,17 @@ async def upload_document(file: UploadFile = File(...)):
 
         # 4. Process with LLM
         skills_data = await extract_skills_with_llm(text)
+        skills = skills_data.get("skills", [])
+
+        # 5. Generate career recommendations from extracted skills
+        recommendations = get_career_recommendations(skills, top_n=5)
 
         return {
             "message": "File processed successfully",
             "filename": file.filename,
-            "extracted_skills": skills_data.get("skills", []),
+            "extracted_skills": skills,
             "explanations": skills_data.get("explanations", []),
-            "recommendations": skills_data.get("recommendations", []),
+            "recommendations": recommendations,
             "character_count": len(text)
         }
 
@@ -353,3 +356,50 @@ Resume Text to Analyze:
     except Exception as e:
         print(f"❌ LLM Processing Error: {str(e)}")
         return {"skills": [], "explanations": [], "recommendations": []}
+
+# ==========================================
+# NEW: CAREER REPORT GENERATION ENDPOINT
+# ==========================================
+
+class ReportRequest(BaseModel):
+    skills: List[str]
+
+@app.post("/api/generate-career-advice")
+async def generate_career_advice(request: ReportRequest):
+    """
+    Generates a comprehensive career report including SWOT analysis and roadmap.
+    """
+    try:
+        skills_text = ", ".join(request.skills) if request.skills else "No skills provided"
+
+        prompt = f"""
+You are an expert Career Coach and Talent Analyst. Based on the following user skills:
+[{skills_text}]
+
+Generate a comprehensive career report in STRICT JSON format. Do not include any markdown or text outside the JSON.
+
+Required JSON Structure:
+{{
+  "executive_summary": "A professional 2-3 sentence summary of this candidate's profile.",
+  "swot_analysis": {{
+    "strengths": ["Strength 1", "Strength 2"],
+    "weaknesses": ["Weakness 1", "Weakness 2"],
+    "opportunities": ["Opportunity 1", "Opportunity 2"],
+    "threats": ["Threat 1", "Threat 2"]
+  }},
+  "action_plan": {{
+    "30_days": "Specific actionable goal for the next 30 days.",
+    "60_days": "Specific actionable goal for the next 60 days.",
+    "90_days": "Specific actionable goal for the next 90 days."
+  }},
+  "recommended_next_skills": ["Skill 1 to learn next", "Skill 2 to learn next"]
+}}
+"""
+        llm_response = await llm_generate(prompt, max_tokens_override=2048)
+        advice_data = json.loads(llm_response)
+        
+        return {"status": "success", "advice": advice_data}
+
+    except Exception as e:
+        print(f"❌ Advice Generation Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating advice: {str(e)}")

@@ -5,6 +5,7 @@ import UserDashboard from './Component/UserDashboard';
 import UploadComponent from './Component/UploadComponent';
 import SkillDashboard from './Component/SkillDashboard';
 import CareerRecommendations from './Component/CareerRecommendations';
+import OnboardingWizard from './Component/OnboardingWizard'; // ✅ NEW IMPORT
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -18,7 +19,8 @@ function App() {
   const [showRecommendations, setShowRecommendations] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [showUploadForm, setShowUploadForm] = useState(false); // ✅ NEW STATE
+  const [showOnboarding, setShowOnboarding] = useState(false); // ✅ NEW STATE
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
 
   useEffect(() => {
     const checkSession = async () => {
@@ -38,19 +40,20 @@ function App() {
 
   const handleAuthSuccess = (authenticatedUser) => {
     setUser(authenticatedUser);
+    // Show onboarding wizard for new users
+    setShowOnboarding(true);
   };
 
   const handleLogout = () => {
     setUser(null);
     setResults(null);
     setShowRecommendations(false);
-    setShowUploadForm(false); // ✅ Reset upload form on logout
+    setShowOnboarding(false);
   };
 
   const handleUploadSuccess = async (data) => {
     setResults(data);
     setShowRecommendations(false);
-    setShowUploadForm(false); // ✅ Hide upload form after successful upload
     setError(null);
     setIsLoading(false);
 
@@ -80,12 +83,10 @@ function App() {
     setShowRecommendations(true);
   };
 
-  // ✅ NEW: Function to show upload form
-  const handleShowUploadForm = () => {
-    setShowUploadForm(true);
-    setResults(null);
-    setShowRecommendations(false);
-  };
+  // ✅ SHOW ONBOARDING WIZARD
+  if (showOnboarding) {
+    return <OnboardingWizard user={user} onComplete={() => setShowOnboarding(false)} />;
+  }
 
   if (loading) {
     return (
@@ -103,6 +104,7 @@ function App() {
     <UserDashboard
       user={user}
       onLogout={handleLogout}
+      onStartOnboarding={() => setShowOnboarding(true)} // ✅ Pass function to dashboard
       onViewAnalysis={(savedAnalysis) => {
         if (savedAnalysis) {
           setResults({
@@ -112,33 +114,20 @@ function App() {
             explanations: savedAnalysis.explanations,
             recommendations: savedAnalysis.recommendations
           });
-          setShowUploadForm(false);
           setShowRecommendations(false);
         } else {
-          // ✅ When onViewAnalysis() is called without params, show upload form
-          handleShowUploadForm();
+          setResults(null);
+          setShowRecommendations(false);
         }
       }}
     >
-      {showUploadForm ? (
+      {!results ? (
         <UploadComponent 
           onUploadSuccess={handleUploadSuccess}
           onUploadError={handleUploadError}
           isLoading={isLoading}
           setIsLoading={setIsLoading}
         />
-      ) : !results ? (
-        // ✅ Show a welcome message or empty state
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <h2 className="text-2xl font-bold text-gray-800 mb-6">Welcome to Skills Pathfinder!</h2>
-          <p className="text-gray-600 mb-4">Get started by uploading your resume to analyze your skills.</p>
-          <button
-            onClick={handleShowUploadForm}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg transition-colors"
-          >
-            Upload Your Resume
-          </button>
-        </div>
       ) : showRecommendations ? (
         <CareerRecommendations 
           skills={results} 
