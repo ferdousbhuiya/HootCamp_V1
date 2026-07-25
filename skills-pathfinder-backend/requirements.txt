@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+supabase
+# openai (Note: OpenRouter and Groq use the standard OpenAI Python SDK format, so this is the correct library to use for the API router!)
+openai
+python-dotenv
+PyPDF2
+pdfplumber

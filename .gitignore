@@ -1,0 +1,48 @@
+# --- Secrets & Environment Variables ---
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
+# --- Dependencies ---
+node_modules/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+*.so
+.Python
+
+# --- Build Output ---
+dist/
+build/
+*.tsbuildinfo
+
+# --- IDE & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# --- OS Files ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Logs ---
+*.log
+npm-debug.log*
+
+# --- Misc ---
+*.sqlite
+*.sqlite3
