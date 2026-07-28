@@ -81,16 +81,41 @@ const OnboardingWizard = ({ user, onComplete }) => {
     setError(null);
 
     try {
-      // 1. Save Skills (Marked as resume_extracted)
+      // 1. Save Skills with Verification Status
       if (extractedSkills.length > 0) {
-        const skillsToInsert = extractedSkills.map(s => ({
-          user_id: user.id,
-          skill_name: s.name,
-          category: s.category || 'General',
-          proficiency_level: 'intermediate',
-          verification_status: 'ai_verified',
-          source: 'resume_extracted'
-        }));
+        const skillsToInsert = extractedSkills.map(skill => {
+          // Check if skill is verified by any certificate
+          const verifiedByCert = extractedCerts.some(cert => 
+            cert.certification_name.toLowerCase().includes(skill.name.toLowerCase()) ||
+            skill.name.toLowerCase().includes(cert.certification_name.toLowerCase())
+          );
+          
+          // Check if skill is being learned in any course
+          const learningInCourse = courses.some(course =>
+            course.course_name.toLowerCase().includes(skill.name.toLowerCase()) ||
+            skill.name.toLowerCase().includes(course.course_name.toLowerCase())
+          );
+
+          let verificationStatus = 'ai_verified';
+          let source = 'resume_extracted';
+          
+          if (verifiedByCert) {
+            verificationStatus = 'certificate_verified';
+            source = 'certificate_verified';
+          } else if (learningInCourse) {
+            verificationStatus = 'in_progress';
+            source = 'ongoing_course';
+          }
+
+          return {
+            user_id: user.id,
+            skill_name: skill.name,
+            category: skill.category || 'General',
+            proficiency_level: 'intermediate',
+            verification_status: verificationStatus,
+            source: source
+          };
+        });
         await supabase.from('skill_tracking').insert(skillsToInsert);
       }
 
@@ -131,6 +156,16 @@ const OnboardingWizard = ({ user, onComplete }) => {
 
   return (
     <div className="max-w-4xl mx-auto p-6">
+      {/* Close button — go back to dashboard without saving */}
+      <div className="flex justify-end mb-2">
+        <button
+          onClick={onComplete}
+          className="text-gray-500 hover:text-gray-700 flex items-center gap-1 px-3 py-1 rounded-lg hover:bg-gray-100 transition-colors"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          Close
+        </button>
+      </div>
       {/* Progress Bar */}
       <div className="mb-8">
         <div className="flex justify-between mb-2">

@@ -5,7 +5,7 @@ import UserDashboard from './Component/UserDashboard';
 import UploadComponent from './Component/UploadComponent';
 import SkillDashboard from './Component/SkillDashboard';
 import CareerRecommendations from './Component/CareerRecommendations';
-import OnboardingWizard from './Component/OnboardingWizard'; // ✅ NEW IMPORT
+import OnboardingWizard from './Component/OnboardingWizard';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -19,13 +19,17 @@ function App() {
   const [showRecommendations, setShowRecommendations] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [showOnboarding, setShowOnboarding] = useState(false); // ✅ NEW STATE
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
 
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       setUser(session?.user || null);
+      // Returning users go to dashboard. Onboarding gate is for new signups only.
+      if (session?.user) {
+        setHasCompletedOnboarding(true);
+      }
       setLoading(false);
     };
 
@@ -38,10 +42,15 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleAuthSuccess = (authenticatedUser) => {
+  const handleAuthSuccess = (authenticatedUser, isNewUser = false) => {
     setUser(authenticatedUser);
-    // Show onboarding wizard for new users
-    setShowOnboarding(true);
+    // Only show onboarding for brand-new signups, not returning sign-ins
+    if (isNewUser) {
+      setShowOnboarding(true);
+    } else {
+      setHasCompletedOnboarding(true);
+      setShowOnboarding(false);
+    }
   };
 
   const handleLogout = () => {
@@ -49,6 +58,7 @@ function App() {
     setResults(null);
     setShowRecommendations(false);
     setShowOnboarding(false);
+    setHasCompletedOnboarding(false);
   };
 
   const handleUploadSuccess = async (data) => {
@@ -83,9 +93,18 @@ function App() {
     setShowRecommendations(true);
   };
 
-  // ✅ SHOW ONBOARDING WIZARD
-  if (showOnboarding) {
-    return <OnboardingWizard user={user} onComplete={() => setShowOnboarding(false)} />;
+  const handleOnboardingComplete = () => {
+    setShowOnboarding(false);
+    setHasCompletedOnboarding(true);
+    // Mark user as having completed onboarding in database
+    if (user) {
+      supabase.from('profiles').update({ has_completed_onboarding: true }).eq('id', user.id);
+    }
+  };
+
+  // Show onboarding wizard for new users
+  if (showOnboarding && user) {
+    return <OnboardingWizard user={user} onComplete={handleOnboardingComplete} />;
   }
 
   if (loading) {
@@ -104,7 +123,7 @@ function App() {
     <UserDashboard
       user={user}
       onLogout={handleLogout}
-      onStartOnboarding={() => setShowOnboarding(true)} // ✅ Pass function to dashboard
+      onStartOnboarding={() => setShowOnboarding(true)}
       onViewAnalysis={(savedAnalysis) => {
         if (savedAnalysis) {
           setResults({
@@ -131,6 +150,7 @@ function App() {
       ) : showRecommendations ? (
         <CareerRecommendations 
           skills={results} 
+          user={user}
           onBack={() => setShowRecommendations(false)}
         />
       ) : (

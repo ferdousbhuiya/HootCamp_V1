@@ -77,7 +77,7 @@ const Auth = ({ onAuthSuccess }) => {
 
         if (profileError) throw profileError;
         
-        onAuthSuccess(data.user);
+        onAuthSuccess(data.user, true);
       }
     } catch (err) {
       setError(err.message);
