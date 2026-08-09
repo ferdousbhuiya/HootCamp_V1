@@ -85,11 +85,35 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
   const handleAddSkill = async (e) => {
     e.preventDefault();
     if (!newSkill.skill_name) return;
+    
+    // Check if skill is verified by any certificate
+    const verifiedByCert = certifications.some(cert => 
+      cert.certification_name.toLowerCase().includes(newSkill.skill_name.toLowerCase()) ||
+      newSkill.skill_name.toLowerCase().includes(cert.certification_name.toLowerCase())
+    );
+    
+    // Check if skill is being learned in any course
+    const learningInCourse = ongoingCourses.some(course =>
+      course.course_name.toLowerCase().includes(newSkill.skill_name.toLowerCase()) ||
+      newSkill.skill_name.toLowerCase().includes(course.course_name.toLowerCase())
+    );
+
+    let verificationStatus = newSkill.proficiency_level === 'beginner' ? 'self_reported' : 'self_reported';
+    let source = 'self_reported';
+    
+    if (verifiedByCert) {
+      verificationStatus = 'certificate_verified';
+      source = 'certificate_verified';
+    } else if (learningInCourse) {
+      verificationStatus = 'in_progress';
+      source = 'ongoing_course';
+    }
+    
     const { data, error } = await supabase.from('skill_tracking').insert([{ 
       user_id: user.id, 
       ...newSkill,
-      verification_status: 'self_reported',
-      source: 'self_reported'
+      verification_status: verificationStatus,
+      source: source
     }]).select();
     if (!error && data) { 
       setTrackedSkills([data[0], ...trackedSkills]); 
@@ -114,10 +138,16 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
     if (!certFile) return;
     setUploadingCert(true);
     try {
+      const apiUrl = import.meta.env.VITE_API_URL;
+      if (!apiUrl) throw new Error('API URL not configured');
       const formData = new FormData();
       formData.append('file', certFile);
-      const response = await fetch('http://localhost:8000/api/verify-certificate', { method: 'POST', body: formData });
-      if (!response.ok) throw new Error('Failed to process certificate');
+      const response = await fetch(`${apiUrl}/api/verify-certificate`, { method: 'POST', body: formData });
+      if (!response.ok) {
+        let msg = 'Failed to process certificate';
+        try { const d = await response.json(); msg = d.detail || msg; } catch { /* use default */ }
+        throw new Error(msg);
+      }
       const data = await response.json();
       setNewCert({
         certification_name: data.certification_name || newCert.certification_name,
@@ -128,7 +158,11 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
       });
       alert('Certificate processed! Details extracted.');
     } catch (error) {
-      alert('Error processing certificate: ' + error.message);
+      if (error.message === 'Failed to fetch' || error.name === 'TypeError') {
+        alert('Cannot reach server. Make sure the backend is running at ' + (import.meta.env.VITE_API_URL || 'http://localhost:8000'));
+      } else {
+        alert('Error processing certificate: ' + error.message);
+      }
     } finally {
       setUploadingCert(false);
     }
@@ -136,7 +170,11 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
 
   const handleAddCert = async (e) => {
     e.preventDefault();
-    if (!newCert.certification_name) return;
+    // Use filename as fallback if name is empty
+    if (!newCert.certification_name) {
+      alert('Please enter certification name or extract it from a certificate file first.');
+      return;
+    }
     
     let verificationStatus = 'self_reported';
     let isVerified = false;
@@ -226,10 +264,24 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
     return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">⚠ Self-Reported</span>;
   };
 
+  const getSkillVerificationBadge = (skill) => {
+    if (skill.verification_status === 'certificate_verified') {
+      return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">🏆 Certificate Verified</span>;
+    }
+    if (skill.verification_status === 'in_progress') {
+      return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">📚 In Progress</span>;
+    }
+    if (skill.verification_status === 'ai_verified') {
+      return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">🤖 AI Extracted</span>;
+    }
+    return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">📝 Self-Reported</span>;
+  };
+
   const filteredSkills = trackedSkills.filter(skill => {
     if (skillFilter === 'all') return true;
-    if (skillFilter === 'verified') return skill.verification_status === 'ai_verified' || skill.source === 'certificate_verified' || skill.verification_status === 'verified';
-    if (skillFilter === 'self_reported') return skill.verification_status === 'self_reported' && skill.source !== 'certificate_verified';
+    if (skillFilter === 'verified') return skill.verification_status === 'certificate_verified' || skill.verification_status === 'ai_verified';
+    if (skillFilter === 'in_progress') return skill.verification_status === 'in_progress';
+    if (skillFilter === 'self_reported') return skill.verification_status === 'self_reported';
     return true;
   });
 
@@ -416,10 +468,13 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
                     All Skills ({trackedSkills.length})
                   </button>
                   <button onClick={() => setSkillFilter('verified')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${skillFilter === 'verified' ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-                    ✓ Verified ({trackedSkills.filter(s => s.verification_status === 'ai_verified' || s.source === 'certificate_verified').length})
+                    ✓ Verified ({trackedSkills.filter(s => s.verification_status === 'certificate_verified' || s.verification_status === 'ai_verified').length})
+                  </button>
+                  <button onClick={() => setSkillFilter('in_progress')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${skillFilter === 'in_progress' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
+                    📚 In Progress ({trackedSkills.filter(s => s.verification_status === 'in_progress').length})
                   </button>
                   <button onClick={() => setSkillFilter('self_reported')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${skillFilter === 'self_reported' ? 'bg-yellow-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-                     Self-Reported ({trackedSkills.filter(s => s.verification_status === 'self_reported' && s.source !== 'certificate_verified').length})
+                     Self-Reported ({trackedSkills.filter(s => s.verification_status === 'self_reported').length})
                   </button>
                 </div>
 
@@ -435,21 +490,17 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
                         )
                       );
 
+                      const relatedCourses = ongoingCourses.filter(course =>
+                        course.course_name.toLowerCase().includes(skill.skill_name.toLowerCase()) ||
+                        skill.skill_name.toLowerCase().includes(course.course_name.toLowerCase())
+                      );
+
                       return (
                         <div key={skill.id} className="border border-gray-200 rounded-lg p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:shadow-md transition-shadow bg-white">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1 flex-wrap">
                               <h3 className="font-semibold text-gray-800 text-lg">{skill.skill_name}</h3>
-                              {(skill.verification_status === 'ai_verified' || skill.source === 'resume_extracted') && (
-                                <span className="text-green-600" title="Extracted from Resume">
-                                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                                </span>
-                              )}
-                              {verifyingCerts.length > 0 && (
-                                <span className="text-yellow-500" title={`Verified by ${verifyingCerts.length} certificate(s)`}>
-                                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>
-                                </span>
-                              )}
+                              {getSkillVerificationBadge(skill)}
                             </div>
                             <p className="text-xs text-gray-500 mb-2">{skill.category}</p>
                             {verifyingCerts.length > 0 && (
@@ -461,15 +512,15 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
                                 ))}
                               </div>
                             )}
-                            <div>
-                              {skill.verification_status === 'ai_verified' || skill.source === 'resume_extracted' ? (
-                                <span className="text-xs text-green-600 font-medium bg-green-50 px-2 py-1 rounded">✓ AI Verified from Resume</span>
-                              ) : skill.source === 'certificate_verified' ? (
-                                <span className="text-xs text-yellow-600 font-medium bg-yellow-50 px-2 py-1 rounded">🏆 Certificate Verified</span>
-                              ) : (
-                                <span className="text-xs text-gray-500 font-medium bg-gray-50 px-2 py-1 rounded">⚠ Self-Reported</span>
-                              )}
-                            </div>
+                            {relatedCourses.length > 0 && (
+                              <div className="flex flex-wrap gap-2 mb-2">
+                                {relatedCourses.map((course, idx) => (
+                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-800 border border-blue-200">
+                                    📚 {course.course_name}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <div className="flex gap-2 items-center">
                             <select value={skill.proficiency_level} onChange={(e) => handleUpdateSkill(skill.id, { proficiency_level: e.target.value })} className="border border-gray-300 rounded px-2 py-1 text-sm">

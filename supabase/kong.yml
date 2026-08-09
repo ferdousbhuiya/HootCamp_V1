@@ -1,0 +1,34 @@
+# ============================================================
+# Skills Pathfinder — Kong declarative config (reference)
+# Routes the public Supabase API entry (:54321) to the internal services:
+#   /auth/v1/*        -> GoTrue (email/password auth + JWT)
+#   /rest/v1/*        -> PostgREST (RLS-protected DB reads/writes)
+# Copy to supabase/kong.yml and keep in sync with docker-compose.supabase.yml.
+# ============================================================
+
+_format_version: "2.1"
+_transform: true
+
+services:
+  - name: auth
+    url: http://auth:9999/
+    routes:
+      - name: auth-all
+        paths:
+          - /auth/v1/
+
+  - name: rest
+    url: http://rest:3000/
+    routes:
+      - name: rest-all
+        paths:
+          - /rest/v1/
+
+  - name: postgres-meta
+    url: http://meta:8080/
+    routes:
+      - name: meta-all
+        paths:
+          - /pg/
+
+consumers: [ ]

@@ -1,0 +1,15 @@
+.env
+.venv
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+tests/
+test_api.py
+test_groq.py
+test_upload.txt
+package.json
+package-lock.json
+node_modules/
+Dockerfile
+.dockerignore

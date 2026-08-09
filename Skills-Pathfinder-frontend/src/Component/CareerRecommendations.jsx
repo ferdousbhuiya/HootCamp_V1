@@ -1,52 +1,82 @@
 import { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
 
-const CareerRecommendations = ({ skills, onBack }) => {
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
+
+const CareerRecommendations = ({ skills, user, onBack }) => {
   const [recommendations, setRecommendations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedCareer, setSelectedCareer] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
+  const [userSkills, setUserSkills] = useState([]);
+  const [userCerts, setUserCerts] = useState([]);
+  const [userCourses, setUserCourses] = useState([]);
 
   useEffect(() => {
-    const fetchRecommendations = async () => {
-      setLoading(true);
-      setError(null);
-      
-      console.log('🔵 1. Skills received in component:', skills?.extracted_skills);
-      
-      try {
-        const response = await fetch('http://localhost:8000/api/recommendations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ extracted_skills: skills?.extracted_skills || [] })
-        });
-
-        console.log('🟡 2. Response status:', response.status);
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.detail || 'Failed to fetch recommendations');
+    const fetchUserData = async () => {
+      if (user) {
+        try {
+          const { data: skillsData } = await supabase.from('skill_tracking').select('*').eq('user_id', user.id);
+          const { data: certsData } = await supabase.from('saved_certifications').select('*').eq('user_id', user.id);
+          const { data: coursesData } = await supabase.from('ongoing_courses').select('*').eq('user_id', user.id);
+          
+          setUserSkills(skillsData || []);
+          setUserCerts(certsData || []);
+          setUserCourses(coursesData || []);
+        } catch (err) {
+          console.error('Error fetching user data:', err);
         }
-        
-        const data = await response.json();
-        console.log('🟢 3. Full API Response:', data);
-        
-        const recs = data.recommendations || [];
-        console.log('🟢 4. Number of recommendations to render:', recs.length);
-        
-        setRecommendations(recs);
-      } catch (err) {
-        console.error('🔴 5. Error fetching recommendations:', err);
-        setError(err.message);
-      } finally {
-        setLoading(false);
       }
     };
 
-    if (skills?.extracted_skills && skills.extracted_skills.length > 0) {
+    fetchUserData();
+  }, [user]);
+
+  useEffect(() => {
+    // Use recommendations already included in the upload response
+    // instead of making a duplicate API call
+    if (skills?.recommendations) {
+      setRecommendations(skills.recommendations);
+      setLoading(false);
+    } else if (skills?.extracted_skills && skills.extracted_skills.length > 0) {
+      // Fallback: if no recommendations in response, fetch them
+      const fetchRecommendations = async () => {
+        setLoading(true);
+        setError(null);
+        
+        try {
+          const apiUrl = import.meta.env.VITE_API_URL;
+          if (!apiUrl) throw new Error('API URL not configured');
+          const response = await fetch(`${apiUrl}/api/recommendations`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ extracted_skills: skills.extracted_skills || [] })
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || 'Failed to fetch recommendations');
+          }
+
+          const data = await response.json();
+          setRecommendations(data.recommendations || []);
+        } catch (err) {
+          if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
+            setError('Cannot reach server. Make sure the backend is running at ' + (import.meta.env.VITE_API_URL || 'http://localhost:8000'));
+          } else {
+            setError(err.message);
+          }
+        } finally {
+          setLoading(false);
+        }
+      };
+      
       fetchRecommendations();
     } else {
-      console.warn('⚠️ No extracted skills found to send to API');
       setLoading(false);
     }
   }, [skills]);
@@ -61,6 +91,26 @@ const CareerRecommendations = ({ skills, onBack }) => {
     if (score >= 0.7) return 'bg-emerald-500';
     if (score >= 0.5) return 'bg-blue-500';
     return 'bg-amber-500';
+  };
+
+  const getSkillVerificationStatus = (skillName) => {
+    const skill = userSkills.find(s => 
+      s.skill_name.toLowerCase() === skillName.toLowerCase() ||
+      skillName.toLowerCase().includes(s.skill_name.toLowerCase())
+    );
+    
+    if (!skill) return { status: 'not_found', badge: null };
+    
+    if (skill.verification_status === 'certificate_verified') {
+      return { status: 'verified', badge: '🏆' };
+    }
+    if (skill.verification_status === 'in_progress') {
+      return { status: 'in_progress', badge: '📚' };
+    }
+    if (skill.verification_status === 'ai_verified') {
+      return { status: 'ai_verified', badge: '🤖' };
+    }
+    return { status: 'self_reported', badge: '📝' };
   };
 
   if (loading) {
@@ -167,21 +217,39 @@ const CareerRecommendations = ({ skills, onBack }) => {
                     <div>
                       <h4 className="font-semibold text-emerald-700 mb-2">✅ Your Matching Skills</h4>
                       <div className="flex flex-wrap gap-2">
-                        {rec.matched_skills.map((skill, i) => (
-                          <span key={i} className="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full text-sm border border-emerald-200">
-                            {skill}
-                          </span>
-                        ))}
+                        {rec.matched_skills.map((skill, i) => {
+                          const verification = getSkillVerificationStatus(skill);
+                          return (
+                            <span key={i} className={`px-3 py-1 rounded-full text-sm border ${
+                              verification.status === 'verified' 
+                                ? 'bg-green-100 text-green-800 border-green-200' 
+                                : verification.status === 'in_progress'
+                                ? 'bg-blue-100 text-blue-800 border-blue-200'
+                                : verification.status === 'ai_verified'
+                                ? 'bg-purple-100 text-purple-800 border-purple-200'
+                                : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                            }`}>
+                              {verification.badge ? `${verification.badge} ` : ''}{skill}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
                     <div>
                       <h4 className="font-semibold text-amber-700 mb-2">🎯 Skills to Develop</h4>
                       <div className="flex flex-wrap gap-2">
-                        {rec.missing_skills.map((skill, i) => (
-                          <span key={i} className="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-sm border border-amber-200">
-                            {skill}
-                          </span>
-                        ))}
+                        {rec.missing_skills.map((skill, i) => {
+                          const verification = getSkillVerificationStatus(skill);
+                          return (
+                            <span key={i} className={`px-3 py-1 rounded-full text-sm border ${
+                              verification.status === 'in_progress'
+                                ? 'bg-blue-100 text-blue-800 border-blue-200'
+                                : 'bg-amber-100 text-amber-800 border-amber-200'
+                            }`}>
+                              {verification.status === 'in_progress' ? '📚 ' : ''}{skill}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>

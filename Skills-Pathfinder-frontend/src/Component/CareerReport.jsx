@@ -13,6 +13,8 @@ const CareerReport = ({ user, profile, skills, certifications, courses, onClose 
   const fetchAdvice = async () => {
     setLoading(true);
     try {
+      const apiUrl = import.meta.env.VITE_API_URL;
+      if (!apiUrl) throw new Error('API URL not configured');
       // Extract skill names - handle both data structures
       const skillNames = skills.map(s => {
         if (s.skill_name) return s.skill_name; // From skill_tracking
@@ -20,16 +22,25 @@ const CareerReport = ({ user, profile, skills, certifications, courses, onClose 
         if (typeof s === 'string') return s;
         return '';
       }).filter(name => name !== '');
-      
-      const res = await fetch('http://localhost:8000/api/generate-career-advice', {
+
+      const res = await fetch(`${apiUrl}/api/generate-career-advice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skills: skillNames })
       });
+      if (!res.ok) {
+        let msg = 'Failed to generate career advice';
+        try { const d = await res.json(); msg = d.detail || msg; } catch { /* use default */ }
+        throw new Error(msg);
+      }
       const data = await res.json();
       if (data.status === 'success') setAdvice(data.advice);
     } catch (err) {
-      console.error('Error fetching advice:', err);
+      if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
+        console.error('Backend unreachable at', import.meta.env.VITE_API_URL);
+      } else {
+        console.error('Error fetching advice:', err);
+      }
     } finally {
       setLoading(false);
     }
@@ -149,9 +160,24 @@ const CareerReport = ({ user, profile, skills, certifications, courses, onClose 
             <div className="flex flex-wrap gap-2 mb-4">
               {skills.slice(0, 15).map((s, i) => {
                 const skillName = s.skill_name || s.name || s;
+                const verificationStatus = s.verification_status || 'self_reported';
+                let badgeColor = 'bg-indigo-100 text-indigo-800';
+                let badgeIcon = '';
+                
+                if (verificationStatus === 'certificate_verified') {
+                  badgeColor = 'bg-green-100 text-green-800';
+                  badgeIcon = '🏆 ';
+                } else if (verificationStatus === 'in_progress') {
+                  badgeColor = 'bg-blue-100 text-blue-800';
+                  badgeIcon = '📚 ';
+                } else if (verificationStatus === 'ai_verified') {
+                  badgeColor = 'bg-purple-100 text-purple-800';
+                  badgeIcon = '🤖 ';
+                }
+                
                 return (
-                  <span key={i} className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm font-medium">
-                    {skillName}
+                  <span key={i} className={`${badgeColor} px-3 py-1 rounded-full text-sm font-medium`}>
+                    {badgeIcon}{skillName}
                   </span>
                 );
               })}

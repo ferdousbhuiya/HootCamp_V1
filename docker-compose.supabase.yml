@@ -1,0 +1,78 @@
+# ============================================================
+# Skills Pathfinder — reference docker-compose for self-hosted Supabase
+#
+# PREFERRED: use Coolify's built-in "Supabase" template instead
+#            (one-click, wires Kong/GoTrue/PostgREST/Storage together).
+#
+# FALLBACK: only if you skip Coolify's template — run this under Coolify
+#           as a "Docker Compose" service, or standalone on the VPS:
+#              docker compose -f docker-compose.supabase.yml up -d
+#
+# Replace EVERY {{...}} placeholder with the values from supabase/.env.
+# ============================================================
+
+services:
+  kong:
+    image: kong:2.8.1
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+    volumes:
+      - ./kong.yml:/home/kong/kong.yml      # gateway routes to the services below
+    ports:
+      - "54321:8000"                        # http://<host>:54321 = Supabase API + Auth + REST
+      - "8443:8443"
+    restart: unless-stopped
+
+  postgres:
+    image: supabase/postgres:15.8.1.147
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./volumes/db:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql  # creates roles/extensions
+    restart: unless-stopped
+
+  auth:
+    image: supabase/gotrue:v2.172.4
+    environment:
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT}
+      GOTRUE_SMTP_USER: ${SMTP_USER}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"    # email verification ON
+    ports:
+      - "9999:9999"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  rest:
+    image: postgrest/postgrest:v12.2.3
+    command: "postgrest /etc/postgrest.conf"
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      PGRST_DB_SCHEMAS: public,storage,graphql_public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # (Storage service omitted here — add supabase/storage realm + minio when
+  # certificate file upload to storage ships. GoTrue + PostgREST cover the
+  # current app: tiered skills, cert metadata, ongoing courses.)
+
+networks:
+  default:
+    driver: bridge

@@ -8,16 +8,20 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
 
   const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
   const validTypes = [
-    'application/pdf', 
+    'application/pdf',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'image/png', 
-    'image/jpeg', 
+    'image/png',
+    'image/jpeg',
     'image/jpg',
     'text/plain'
   ];
+  const validExtensions = ['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.txt'];
 
   const validateFile = (file) => {
-    if (!validTypes.includes(file.type)) {
+    const ext = '.' + (file.name?.split('.').pop() || '').toLowerCase();
+    const mimeOk = validTypes.includes(file.type);
+    const extOk = validExtensions.includes(ext);
+    if (!mimeOk && !extOk) {
       return 'Invalid file type. Supported: PDF, DOCX, PNG, JPG, JPEG, TXT';
     }
     if (file.size > MAX_FILE_SIZE) {
@@ -52,7 +56,12 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
     const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
 
     try {
-      const response = await fetch('http://localhost:8000/api/upload', {
+      const apiUrl = import.meta.env.VITE_API_URL;
+      if (!apiUrl) {
+        throw new Error('API URL not configured (VITE_API_URL is missing).');
+      }
+
+      const response = await fetch(`${apiUrl}/api/upload`, {
         method: 'POST',
         body: formData,
         signal: controller.signal
@@ -61,8 +70,12 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }));
-        throw new Error(errorData.detail || `Server error: ${response.status}`);
+        let errorMsg = `Server error: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.detail || errorMsg;
+        } catch { /* use default */ }
+        throw new Error(errorMsg);
       }
 
       const data = await response.json();
@@ -73,6 +86,9 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
       if (err.name === 'AbortError') {
         setError('Upload timed out. The file might be too large or the server is busy. Please try again.');
         onUploadError({ message: 'Upload timed out' });
+      } else if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
+        setError('Cannot reach server. Make sure the backend is running at ' + (import.meta.env.VITE_API_URL || 'http://localhost:8000'));
+        onUploadError({ message: 'Backend unreachable' });
       } else {
         const errMsg = err.message || 'An unexpected error occurred during upload.';
         setError(errMsg);

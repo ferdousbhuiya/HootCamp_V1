@@ -33,12 +33,22 @@ const OnboardingWizard = ({ user, onComplete }) => {
     formData.append('file', file);
 
     try {
-      const res = await fetch('http://localhost:8000/api/upload', { method: 'POST', body: formData });
-      if (!res.ok) throw new Error('Failed to process resume');
+      const apiUrl = import.meta.env.VITE_API_URL;
+      if (!apiUrl) throw new Error('API URL not configured');
+      const res = await fetch(`${apiUrl}/api/upload`, { method: 'POST', body: formData });
+      if (!res.ok) {
+        let msg = 'Failed to process resume';
+        try { const d = await res.json(); msg = d.detail || msg; } catch { /* use default */ }
+        throw new Error(msg);
+      }
       const data = await res.json();
       setExtractedSkills(data.extracted_skills || []);
     } catch (err) {
-      setError(err.message);
+      if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
+        setError('Cannot reach server. Make sure the backend is running at ' + (import.meta.env.VITE_API_URL || 'http://localhost:8000'));
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -56,12 +66,22 @@ const OnboardingWizard = ({ user, onComplete }) => {
     formData.append('file', file);
 
     try {
-      const res = await fetch('http://localhost:8000/api/verify-certificate', { method: 'POST', body: formData });
-      if (!res.ok) throw new Error('Failed to process certificate');
+      const apiUrl = import.meta.env.VITE_API_URL;
+      if (!apiUrl) throw new Error('API URL not configured');
+      const res = await fetch(`${apiUrl}/api/verify-certificate`, { method: 'POST', body: formData });
+      if (!res.ok) {
+        let msg = 'Failed to process certificate';
+        try { const d = await res.json(); msg = d.detail || msg; } catch { /* use default */ }
+        throw new Error(msg);
+      }
       const data = await res.json();
       setExtractedCerts([...extractedCerts, { ...data, auto_verified: data.auto_verified || false }]);
     } catch (err) {
-      setError(err.message);
+      if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
+        setError('Cannot reach server. Make sure the backend is running at ' + (import.meta.env.VITE_API_URL || 'http://localhost:8000'));
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
