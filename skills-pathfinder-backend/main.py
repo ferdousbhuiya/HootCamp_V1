@@ -54,7 +54,22 @@ app.add_middleware(
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+_supabase_client: "Client | None" = None
+
+
+def get_supabase() -> Client:
+    """Return a lazily-initialized Supabase client.
+
+    None of the current endpoints query Supabase — all DB access happens
+    client-side in the browser via supabase-js. Initializing lazily means a
+    missing, rotated, or new-format key can never block boot.
+    """
+    global _supabase_client
+    if _supabase_client is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set to use Supabase")
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_client
 
 
 # ==========================================
