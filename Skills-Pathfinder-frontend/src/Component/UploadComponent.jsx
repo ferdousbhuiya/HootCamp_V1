@@ -56,10 +56,9 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
     const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL;
-      if (!apiUrl) {
-        throw new Error('API URL not configured (VITE_API_URL is missing).');
-      }
+      // VITE_API_URL empty in production (Topology B): browser calls /api/*
+      // same-origin and nginx proxies to the backend. Set only to bypass the proxy.
+      const apiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
       const response = await fetch(`${apiUrl}/api/upload`, {
         method: 'POST',
