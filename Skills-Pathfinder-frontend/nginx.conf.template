@@ -5,27 +5,33 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    # Always fall back to the SPA shell for client-side navigation
     location / {
         try_files $uri $uri/ /index.html;
     }
 
-    # Reverse-proxy API calls to the backend, preserving POST bodies
-    # and streaming uploads. Trailing-slash avoid is important so /api/upload
-    # maps to the backend's exact route.
     location /api/ {
         proxy_pass ${API_UPSTREAM}/api/;
+
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+
+        proxy_set_header Host api.ferdous.us;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_ssl_server_name on;
+        proxy_ssl_name api.ferdous.us;
+
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
+        proxy_busy_buffers_size 32k;
+
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
-        client_max_body_size 15m;   # match backend 15MB upload limit
+
+        client_max_body_size 15m;
     }
 
-    # Cache hashed static assets aggressively; index.html never cached
     location ~* \.(?:js|css|png|jpg|jpeg|gif|svg|ico|woff2?)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
