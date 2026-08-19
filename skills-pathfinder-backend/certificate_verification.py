@@ -26,6 +26,8 @@ TRUSTED_VERIFICATION_HOST_SUFFIXES = (
     "credential.net",
     "accredible.com",
     "coursera.org",
+    "udemy.com",
+    "linkedin.com",
     "edx.org",
     "microsoft.com",
     "learn.microsoft.com",
@@ -70,7 +72,6 @@ def _looks_like_public_hostname(hostname: str) -> bool:
     if host.endswith(".local") or host.endswith(".internal"):
         return False
 
-    # Trusted hosts are DNS names, but this also blocks literal private IPs.
     try:
         ip = socket.inet_pton(socket.AF_INET, host)
         if ip:
@@ -143,10 +144,8 @@ def _evidence_terms(certificate: Dict[str, Any]) -> Iterable[str]:
 
     if credential_id and len(credential_id) >= 4:
         yield credential_id
-
     if certification_name and len(certification_name) >= 5:
         yield certification_name
-
     if holder_name and len(holder_name) >= 5:
         yield holder_name
 
@@ -172,7 +171,6 @@ def verify_certificate_url(certificate: Dict[str, Any]) -> Dict[str, Any]:
             final_url = response.geturl()
             final_host = urllib.parse.urlparse(final_url).hostname or ""
 
-            # Do not follow a trusted URL into an untrusted host and call it verified.
             if not _host_is_trusted(final_host):
                 return {
                     "verification_status": "verification_redirect_untrusted",
@@ -188,7 +186,6 @@ def verify_certificate_url(certificate: Dict[str, Any]) -> Dict[str, Any]:
             page_text = _normalize(_text_from_html(raw))
             evidence = [term for term in _evidence_terms(certificate) if term in page_text]
 
-            # Credential ID is strongest evidence. Name + holder is also acceptable.
             credential_id = _normalize(certificate.get("credential_id"))
             cert_name = _normalize(certificate.get("certification_name"))
             holder_name = _normalize(certificate.get("holder_name"))
