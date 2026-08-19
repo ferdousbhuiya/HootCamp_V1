@@ -10,6 +10,7 @@ const ACCEPTED_DOCUMENTS = '.pdf,.docx,.txt,.png,.jpg,.jpeg';
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 const emptyCourse = { course_name: '', provider: '', expected_completion_date: '', status: 'in_progress' };
 const normalizeName = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const createSessionKey = () => globalThis.crypto?.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 const statusPresentation = (status) => {
   switch (status) {
@@ -25,6 +26,7 @@ const statusPresentation = (status) => {
 };
 
 const OnboardingWizard = ({ user, onComplete, onCancel }) => {
+  const [sessionKey] = useState(createSessionKey);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -180,7 +182,7 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
         confidence: Math.max(Number(existing.confidence || 0), confidence),
         evidence: candidate.evidence || existing.evidence || null,
         status: candidate.status || existing.status || 'existing',
-        metadata: { ...(existing.metadata || {}), onboarding_updated: true },
+        metadata: { ...(existing.metadata || {}), onboarding_session: sessionKey },
         updated_at: new Date().toISOString()
       };
       if (verifiedPromotion) {
@@ -204,7 +206,7 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
       confidence,
       evidence: candidate.evidence || null,
       source_record_id: sourceRecordId,
-      metadata: { onboarding_created: true }
+      metadata: { onboarding_session: sessionKey }
     });
     if (error) throw error;
   };
@@ -215,21 +217,24 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
     try {
       let analysisId = null;
       if (resumeData) {
-        const { data: analysis, error: analysisError } = await supabase.from('resume_analyses').insert({
+        const resumeKey = `${sessionKey}:resume`;
+        const { data: analysis, error: analysisError } = await supabase.from('resume_analyses').upsert({
           user_id: user.id,
+          client_record_key: resumeKey,
           filename: resumeData.filename || resumeFile?.name || 'resume',
           character_count: resumeData.character_count || 0,
           skills_count: resumeSkills.length,
           extracted_skills: resumeSkills,
           explanations: resumeData.explanations || [],
           recommendations: resumeData.recommendations || []
-        }).select('id').single();
+        }, { onConflict: 'user_id,client_record_key' }).select('id').single();
         if (analysisError) throw analysisError;
         analysisId = analysis.id;
 
         if ((resumeData.recommendations || []).length) {
-          const recommendationRows = resumeData.recommendations.map((rec) => ({
+          const recommendationRows = resumeData.recommendations.map((rec, index) => ({
             user_id: user.id,
+            client_record_key: `${sessionKey}:career:${rec.id || index}`,
             source_analysis_id: analysisId,
             career_id: rec.id,
             career_title: rec.path,
@@ -242,7 +247,9 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
             recommendation_data: rec,
             market_data: {}
           }));
-          const { error: recommendationError } = await supabase.from('career_recommendations').insert(recommendationRows);
+          const { error: recommendationError } = await supabase
+            .from('career_recommendations')
+            .upsert(recommendationRows, { onConflict: 'user_id,client_record_key' });
           if (recommendationError) throw recommendationError;
         }
       }
@@ -250,8 +257,9 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
       const savedCertificateIds = new Map();
       for (let index = 0; index < certificates.length; index += 1) {
         const cert = certificates[index];
-        const { data: savedCert, error: certError } = await supabase.from('saved_certifications').insert({
+        const { data: savedCert, error: certError } = await supabase.from('saved_certifications').upsert({
           user_id: user.id,
+          client_record_key: `${sessionKey}:cert:${index}`,
           certification_name: cert.certification_name,
           provider: cert.provider || 'Unknown',
           holder_name: cert.holder_name || null,
@@ -272,7 +280,7 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
           status: 'completed',
           source: cert.is_verified ? 'certificate_verified' : 'certificate_extracted',
           updated_at: new Date().toISOString()
-        }).select('id').single();
+        }, { onConflict: 'user_id,client_record_key' }).select('id').single();
         if (certError) throw certError;
         savedCertificateIds.set(index, savedCert.id);
       }
@@ -293,13 +301,17 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
       }
 
       if (courses.length) {
-        const { error: coursesError } = await supabase.from('ongoing_courses').insert(courses.map((course) => ({
+        const courseRows = courses.map((course, index) => ({
           user_id: user.id,
+          client_record_key: `${sessionKey}:course:${index}`,
           course_name: course.course_name,
           provider: course.provider || null,
           expected_completion_date: course.expected_completion_date || null,
           status: course.status || 'in_progress'
-        })));
+        }));
+        const { error: coursesError } = await supabase
+          .from('ongoing_courses')
+          .upsert(courseRows, { onConflict: 'user_id,client_record_key' });
         if (coursesError) throw coursesError;
       }
 
@@ -311,7 +323,7 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
 
       onComplete();
     } catch (err) {
-      setError(`Error saving profile data: ${err.message}`);
+      setError(`Error saving profile data: ${err.message}. You can safely retry this same save; onboarding records use retry-safe keys.`);
     } finally {
       setLoading(false);
     }
@@ -335,7 +347,7 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
 
       {step === 3 && <div className="rounded-xl bg-white p-6 shadow-lg"><h2 className="mb-2 text-2xl font-bold">Ongoing Courses</h2><p className="mb-6 text-gray-600">Manual entry is expected here. You can add, edit, remove, go back, or continue without a course.</p><form onSubmit={handleCourseSubmit} className="grid grid-cols-1 gap-3 rounded-lg bg-blue-50 p-4 md:grid-cols-4"><input required placeholder="Course name" value={courseForm.course_name} onChange={(e) => setCourseForm({ ...courseForm, course_name: e.target.value })} className="rounded border px-3 py-2 md:col-span-2" /><input placeholder="Provider" value={courseForm.provider} onChange={(e) => setCourseForm({ ...courseForm, provider: e.target.value })} className="rounded border px-3 py-2" /><input type="date" value={courseForm.expected_completion_date} onChange={(e) => setCourseForm({ ...courseForm, expected_completion_date: e.target.value })} className="rounded border px-3 py-2" /><select value={courseForm.status} onChange={(e) => setCourseForm({ ...courseForm, status: e.target.value })} className="rounded border px-3 py-2"><option value="in_progress">In Progress</option><option value="paused">Paused</option><option value="completed">Completed</option></select><div className="flex gap-2 md:col-span-3"><button className="rounded bg-blue-600 px-4 py-2 text-white">{editingCourseIndex === null ? 'Add Course' : 'Update Course'}</button>{editingCourseIndex !== null && <button type="button" onClick={cancelCourseEdit} className="rounded bg-gray-200 px-4 py-2">Cancel Edit</button>}</div></form><div className="mt-4 space-y-2">{courses.map((course, index) => <div key={`${course.course_name}-${index}`} className="flex flex-col justify-between gap-2 rounded-lg border p-3 md:flex-row md:items-center"><div><p className="font-medium">{course.course_name}</p><p className="text-sm text-gray-500">{course.provider || 'Provider not specified'} • {course.status}</p></div><div className="flex gap-3"><button onClick={() => editCourse(course, index)} className="text-sm text-indigo-600">Edit</button><button onClick={() => removeCourse(index)} className="text-sm text-red-600">Remove</button></div></div>)}</div><div className="mt-6 flex justify-between"><button onClick={() => setStep(2)} className="text-gray-600 hover:text-indigo-600">← Back</button><button onClick={() => setStep(4)} className="rounded-lg bg-indigo-600 px-6 py-2 text-white">Next: Review →</button></div></div>}
 
-      {step === 4 && <div className="rounded-xl bg-white p-6 shadow-lg"><h2 className="mb-5 text-2xl font-bold">Review & Save</h2><div className="space-y-5"><div><h3 className="font-semibold">Resume</h3><p className="text-sm text-gray-600">{resumeData ? `${resumeData.filename || resumeFile?.name}: ${resumeSkills.length} skills, ${(resumeData.recommendations || []).length} career recommendations` : 'No resume uploaded in this onboarding session.'}</p></div><div><h3 className="font-semibold">Certificates ({certificates.length})</h3>{certificates.map((cert, index) => <p key={index} className="text-sm text-gray-600">{cert.certification_name} • {statusPresentation(cert.verification_status).label} • {(cert.extracted_skills || []).length} skills</p>)}</div><div><h3 className="font-semibold">Unified Skill Findings ({combinedSkills.length})</h3><div className="mt-2 flex flex-wrap gap-2">{combinedSkills.map((skill, index) => <span key={`${skill.name}-${index}`} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-800">{skill.name}</span>)}</div></div><div><h3 className="font-semibold">Ongoing Courses ({courses.length})</h3>{courses.map((course, index) => <p key={index} className="text-sm text-gray-600">{course.course_name} • {course.status}</p>)}</div></div><div className="mt-7 flex justify-between"><button onClick={() => setStep(3)} className="rounded-lg bg-gray-200 px-5 py-2">← Back</button><button onClick={handleFinish} disabled={loading} className="rounded-lg bg-green-600 px-6 py-2 text-white disabled:opacity-50">{loading ? 'Saving all findings...' : 'Finish & Save Everything'}</button></div></div>}
+      {step === 4 && <div className="rounded-xl bg-white p-6 shadow-lg"><h2 className="mb-5 text-2xl font-bold">Review & Save</h2><div className="space-y-5"><div><h3 className="font-semibold">Resume</h3><p className="text-sm text-gray-600">{resumeData ? `${resumeData.filename || resumeFile?.name}: ${resumeSkills.length} skills, ${(resumeData.recommendations || []).length} career recommendations` : 'No resume uploaded in this onboarding session.'}</p></div><div><h3 className="font-semibold">Certificates ({certificates.length})</h3>{certificates.map((cert, index) => <p key={index} className="text-sm text-gray-600">{cert.certification_name} • {statusPresentation(cert.verification_status).label} • {(cert.extracted_skills || []).length} skills</p>)}</div><div><h3 className="font-semibold">Unified Skill Findings ({combinedSkills.length})</h3><div className="mt-2 flex flex-wrap gap-2">{combinedSkills.map((skill, index) => <span key={`${skill.name}-${index}`} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-800">{skill.name}</span>)}</div></div><div><h3 className="font-semibold">Ongoing Courses ({courses.length})</h3>{courses.map((course, index) => <p key={index} className="text-sm text-gray-600">{course.course_name} • {course.status}</p>)}</div><p className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">This save is retry-safe. If the network fails halfway through, retrying uses the same onboarding record keys instead of creating duplicate resume, certificate, course, or career-recommendation records.</p></div><div className="mt-7 flex justify-between"><button onClick={() => setStep(3)} className="rounded-lg bg-gray-200 px-5 py-2">← Back</button><button onClick={handleFinish} disabled={loading} className="rounded-lg bg-green-600 px-6 py-2 text-white disabled:opacity-50">{loading ? 'Saving all findings...' : 'Finish & Save Everything'}</button></div></div>}
     </div>
   );
 };
