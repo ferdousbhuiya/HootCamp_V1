@@ -6,6 +6,7 @@ import UploadComponent from './Component/UploadComponent';
 import SkillDashboard from './Component/SkillDashboard';
 import CareerRecommendations from './Component/CareerRecommendations';
 import OnboardingWizard from './Component/OnboardingWizard';
+import CareerAdvisor from './Component/CareerAdvisor';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -30,19 +31,16 @@ function App() {
       .select('has_completed_onboarding')
       .eq('id', userId)
       .maybeSingle();
-
     if (profileError) throw profileError;
     return Boolean(profile?.has_completed_onboarding);
   };
 
   useEffect(() => {
     let active = true;
-
     const checkSession = async () => {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) console.error('Session check failed:', sessionError);
       if (!active) return;
-
       setUser(session?.user || null);
 
       if (session?.user) {
@@ -59,7 +57,6 @@ function App() {
           setError('Your account is signed in, but onboarding status could not be restored. You can reopen onboarding from the dashboard.');
         }
       }
-
       if (active) setLoading(false);
     };
 
@@ -84,13 +81,11 @@ function App() {
   const handleAuthSuccess = async (authenticatedUser, isNewUser = false) => {
     setUser(authenticatedUser);
     setError(null);
-
     if (isNewUser) {
       setHasCompletedOnboarding(false);
       setShowOnboarding(true);
       return;
     }
-
     try {
       const completed = await readOnboardingState(authenticatedUser.id);
       setHasCompletedOnboarding(completed);
@@ -115,7 +110,6 @@ function App() {
   const syncResumeSkills = async (analysisId, data) => {
     const incomingSkills = Array.isArray(data.extracted_skills) ? data.extracted_skills : [];
     if (!incomingSkills.length) return;
-
     const { data: existingSkills, error: existingError } = await supabase
       .from('skill_tracking')
       .select('id,skill_name,source,verification_status,confidence,metadata')
@@ -131,7 +125,6 @@ function App() {
       const current = existingMap.get(key);
       const explanation = explanationMap.get(key);
       const confidence = Number.isFinite(Number(skill.confidence)) ? Number(skill.confidence) : 0.8;
-
       if (current) {
         const updates = {
           category: skill.category || undefined,
@@ -158,12 +151,7 @@ function App() {
           source_record_id: analysisId,
           metadata: {
             reasoning: explanation?.reasoning || null,
-            sources: [{
-              source: 'resume_extracted',
-              source_record_id: analysisId,
-              verification_status: 'ai_verified',
-              evidence: explanation?.evidence || null
-            }]
+            sources: [{ source: 'resume_extracted', source_record_id: analysisId, verification_status: 'ai_verified', evidence: explanation?.evidence || null }]
           },
           last_seen_at: new Date().toISOString()
         }).select('id,skill_name,source,verification_status,confidence,metadata').single();
@@ -200,7 +188,6 @@ function App() {
     setShowRecommendations(false);
     setError(null);
     setIsLoading(false);
-
     if (!user) return;
     try {
       const { data: savedAnalysis, error: saveError } = await supabase.from('resume_analyses').insert({
@@ -244,9 +231,7 @@ function App() {
     }
   };
 
-  const handleOnboardingCancel = () => {
-    setShowOnboarding(false);
-  };
+  const handleOnboardingCancel = () => setShowOnboarding(false);
 
   if (showOnboarding && user) {
     return <OnboardingWizard user={user} onComplete={handleOnboardingComplete} onCancel={handleOnboardingCancel} />;
@@ -259,36 +244,39 @@ function App() {
   if (!user) return <Auth onAuthSuccess={handleAuthSuccess} />;
 
   return (
-    <UserDashboard
-      user={user}
-      onboardingComplete={hasCompletedOnboarding}
-      onLogout={handleLogout}
-      onStartOnboarding={() => setShowOnboarding(true)}
-      onViewAnalysis={(savedAnalysis) => {
-        if (savedAnalysis) {
-          setResults({
-            filename: savedAnalysis.filename,
-            character_count: savedAnalysis.character_count,
-            extracted_skills: savedAnalysis.extracted_skills || [],
-            explanations: savedAnalysis.explanations || [],
-            recommendations: savedAnalysis.recommendations || []
-          });
-        } else {
-          setResults(null);
-        }
-        setShowRecommendations(false);
-        setError(null);
-      }}
-    >
-      {error && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{error}</div>}
-      {!results ? (
-        <UploadComponent onUploadSuccess={handleUploadSuccess} onUploadError={handleUploadError} isLoading={isLoading} setIsLoading={setIsLoading} />
-      ) : showRecommendations ? (
-        <CareerRecommendations skills={results} user={user} onBack={() => setShowRecommendations(false)} />
-      ) : (
-        <SkillDashboard results={results} onBack={() => { setResults(null); setError(null); }} onRecommendations={() => setShowRecommendations(true)} />
-      )}
-    </UserDashboard>
+    <>
+      <UserDashboard
+        user={user}
+        onboardingComplete={hasCompletedOnboarding}
+        onLogout={handleLogout}
+        onStartOnboarding={() => setShowOnboarding(true)}
+        onViewAnalysis={(savedAnalysis) => {
+          if (savedAnalysis) {
+            setResults({
+              filename: savedAnalysis.filename,
+              character_count: savedAnalysis.character_count,
+              extracted_skills: savedAnalysis.extracted_skills || [],
+              explanations: savedAnalysis.explanations || [],
+              recommendations: savedAnalysis.recommendations || []
+            });
+          } else {
+            setResults(null);
+          }
+          setShowRecommendations(false);
+          setError(null);
+        }}
+      >
+        {error && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{error}</div>}
+        {!results ? (
+          <UploadComponent onUploadSuccess={handleUploadSuccess} onUploadError={handleUploadError} isLoading={isLoading} setIsLoading={setIsLoading} />
+        ) : showRecommendations ? (
+          <CareerRecommendations skills={results} user={user} onBack={() => setShowRecommendations(false)} />
+        ) : (
+          <SkillDashboard results={results} onBack={() => { setResults(null); setError(null); }} onRecommendations={() => setShowRecommendations(true)} />
+        )}
+      </UserDashboard>
+      <CareerAdvisor user={user} />
+    </>
   );
 }
 
