@@ -1,77 +1,66 @@
-# main.py
+# ============================================================
 # Skills Pathfinder Backend
-# Robust document extraction + OCR + Groq skill analysis
+# Version 1.2.0
+#
+# Step 4B:
+# Comprehensive document extraction and skill analysis
+# ============================================================
 
 import os
 import io
 import json
 import re
 import traceback
-import zipfile
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv
-from PyPDF2 import PdfReader
-import pdfplumber
-import pytesseract
-import docx
-
-from PIL import Image
-
-from groq import Groq
-from pydantic import BaseModel
-
 from supabase import create_client, Client
 
-# Optional scanned PDF OCR
+from PyPDF2 import PdfReader
+import pytesseract
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+import docx
+
+from groq import Groq
+
+from pydantic import BaseModel
+
+from recommendation_engine import (
+    get_career_recommendations,
+    get_skill_gap_analysis,
+)
+
+# Optional scanned-PDF OCR support
 try:
     from pdf2image import convert_from_bytes
     PDF2IMAGE_AVAILABLE = True
-except Exception:
+except ImportError:
     PDF2IMAGE_AVAILABLE = False
 
 
 # ============================================================
-# 1. LOAD ENVIRONMENT
+# 1. ENVIRONMENT
 # ============================================================
 
 load_dotenv()
 
-print("=" * 70)
-print("SKILLS PATHFINDER BACKEND STARTING")
-print("=" * 70)
-
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv(
-    "GROQ_MODEL",
-    "llama-3.3-70b-versatile"
-)
-
-TESSERACT_CMD = os.getenv("TESSERACT_CMD", "tesseract")
-
-try:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
-except Exception:
-    pass
-
-print(f"[CONFIG] GROQ_MODEL = {GROQ_MODEL}")
-print(f"[CONFIG] GROQ_API_KEY configured = {bool(GROQ_API_KEY)}")
-print(f"[CONFIG] TESSERACT_CMD = {TESSERACT_CMD}")
-print(f"[CONFIG] PDF2IMAGE_AVAILABLE = {PDF2IMAGE_AVAILABLE}")
-
 
 # ============================================================
-# 2. FASTAPI
+# 2. FASTAPI APPLICATION
 # ============================================================
 
 app = FastAPI(
     title="Skills Pathfinder API",
-    version="1.1.0",
-    description="Backend API for Skills Pathfinder"
+    version="1.2.0",
+    description=(
+        "Backend API for Skills Pathfinder. "
+        "Supports document extraction, OCR, comprehensive "
+        "skill analysis, career recommendations and career reports."
+    ),
 )
 
 
@@ -84,7 +73,8 @@ ALLOWED_ORIGINS = os.getenv(
     "http://localhost:3000,"
     "http://localhost:5173,"
     "https://ferdouse.us,"
-    "https://www.ferdouse.us"
+    "https://www.ferdouse.us,"
+    "https://skillpathfinder.ferdous.us",
 ).split(",")
 
 app.add_middleware(
@@ -103,58 +93,63 @@ app.add_middleware(
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-_supabase_client: Client | None = None
+_supabase_client: Optional[Client] = None
 
 
 def get_supabase() -> Client:
+    """
+    Lazily initialize Supabase.
+
+    The current document-processing endpoints do not require
+    Supabase. This prevents a Supabase configuration problem
+    from stopping the API from starting.
+    """
     global _supabase_client
 
     if _supabase_client is None:
-
         if not SUPABASE_URL or not SUPABASE_KEY:
             raise RuntimeError(
-                "SUPABASE_URL and SUPABASE_KEY must be configured"
+                "SUPABASE_URL and SUPABASE_KEY must be configured."
             )
 
         _supabase_client = create_client(
             SUPABASE_URL,
-            SUPABASE_KEY
+            SUPABASE_KEY,
         )
 
     return _supabase_client
 
 
 # ============================================================
-# 5. GROQ CLIENT
+# 5. GROQ / LLM
 # ============================================================
 
-groq_client = None
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if GROQ_API_KEY:
-    try:
-        groq_client = Groq(api_key=GROQ_API_KEY)
-        print("[OK] Groq client initialized")
-    except Exception as e:
-        print(f"[ERROR] Could not initialize Groq: {e}")
-else:
-    print("[ERROR] GROQ_API_KEY is missing")
+GROQ_MODEL = os.getenv(
+    "GROQ_MODEL",
+    "llama-3.3-70b-versatile",
+)
+
+if not GROQ_API_KEY:
+    print("[WARN] GROQ_API_KEY is not configured.")
+
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 
 async def llm_generate(
     prompt: str,
-    max_tokens_override: int = 4096
-):
-
-    if not groq_client:
-        raise HTTPException(
-            status_code=500,
-            detail="GROQ_API_KEY is not configured on the backend."
-        )
+    max_tokens_override: int = 8192,
+) -> str:
+    """
+    Send a prompt to Groq and return the JSON response.
+    """
 
     try:
-
         print(
-            f"[LLM] Calling Groq model: {GROQ_MODEL}"
+            f"[LLM] Calling Groq API "
+            f"model={GROQ_MODEL}, "
+            f"max_tokens={max_tokens_override}"
         )
 
         completion = groq_client.chat.completions.create(
@@ -163,349 +158,246 @@ async def llm_generate(
                 {
                     "role": "system",
                     "content": (
-                        "You are an expert resume and skills analyzer. "
-                        "When JSON is requested, return ONLY valid JSON. "
-                        "Never return markdown fences."
-                    )
+                        "You are an expert resume parser, technical "
+                        "recruiter, career analyst and skills taxonomy "
+                        "specialist. "
+                        "Return ONLY valid JSON. "
+                        "Never return markdown. "
+                        "Never add explanations outside the JSON object."
+                    ),
                 },
                 {
                     "role": "user",
-                    "content": prompt
-                }
+                    "content": prompt,
+                },
             ],
-            temperature=0.1,
+            temperature=0.05,
             max_tokens=max_tokens_override,
-            response_format={
-                "type": "json_object"
-            }
+            response_format={"type": "json_object"},
         )
 
-        response_text = (
-            completion.choices[0]
-            .message
-            .content
-        )
-
-        if response_text is None:
-            raise ValueError("Groq returned an empty response")
+        response_text = completion.choices[0].message.content or ""
 
         print(
-            f"[LLM] Response length: {len(response_text)}"
-        )
-
-        print(
-            f"[LLM] Response preview: "
-            f"{response_text[:500]}"
+            f"[LLM] Response length: "
+            f"{len(response_text)} characters"
         )
 
         return response_text
 
-    except HTTPException:
-        raise
-
     except Exception as e:
-
-        print(
-            f"[LLM] Groq API ERROR: {str(e)}"
-        )
-
-        traceback.print_exc()
+        print(f"[LLM] Groq API Error: {str(e)}")
 
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to connect to Groq API: {str(e)}"
+            detail=f"Failed to connect to Groq API: {str(e)}",
         )
 
 
 # ============================================================
-# 6. OCR HELPER
+# 6. TEXT CLEANING
 # ============================================================
 
-def run_ocr(image: Image.Image) -> str:
+def clean_extracted_text(text: str) -> str:
+    """
+    Clean OCR/PDF/DOCX text without destroying useful information.
+    """
 
-    try:
-
-        print(
-            f"[OCR] Processing image "
-            f"{image.size}"
-        )
-
-        # Convert to RGB first
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        # Grayscale
-        gray = image.convert("L")
-
-        # OCR
-        text = pytesseract.image_to_string(
-            gray,
-            config="--psm 6"
-        )
-
-        print(
-            f"[OCR] Extracted {len(text)} characters"
-        )
-
-        return text or ""
-
-    except Exception as e:
-
-        print(
-            f"[OCR ERROR] {str(e)}"
-        )
-
-        traceback.print_exc()
-
+    if not text:
         return ""
 
+    # Normalize different line endings
+    text = text.replace("\r\n", "\n")
+    text = text.replace("\r", "\n")
+
+    # Remove null characters
+    text = text.replace("\x00", "")
+
+    # Normalize tabs
+    text = text.replace("\t", " ")
+
+    # Remove excessive spaces
+    text = re.sub(r"[ ]{2,}", " ", text)
+
+    # Preserve lines but remove excessive blank lines
+    text = re.sub(r"\n[ ]+\n", "\n\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
 
 # ============================================================
-# 7. PDF EXTRACTION
+# 7. IMAGE PREPROCESSING FOR OCR
+# ============================================================
+
+def preprocess_image_for_ocr(image: Image.Image) -> Image.Image:
+    """
+    Improve OCR quality for photographs and scanned documents.
+    """
+
+    # Correct orientation where possible
+    try:
+        image = ImageOps.exif_transpose(image)
+    except Exception:
+        pass
+
+    # Convert to grayscale
+    image = image.convert("L")
+
+    # Increase contrast
+    image = ImageEnhance.Contrast(image).enhance(1.7)
+
+    # Slight sharpening
+    image = image.filter(ImageFilter.SHARPEN)
+
+    return image
+
+
+# ============================================================
+# 8. PDF EXTRACTION
 # ============================================================
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """
+    Extract selectable text from PDF.
+
+    If very little text is found, automatically use OCR.
+    """
 
     extracted_parts = []
 
     # --------------------------------------------------------
-    # Method 1: PyPDF2
+    # First attempt: normal PDF text extraction
     # --------------------------------------------------------
 
     try:
-
-        print("[PDF] Trying PyPDF2 extraction")
-
-        reader = PdfReader(
-            io.BytesIO(file_bytes)
-        )
+        reader = PdfReader(io.BytesIO(file_bytes))
 
         print(
-            f"[PDF] Pages: {len(reader.pages)}"
+            f"[PDF] Number of pages: "
+            f"{len(reader.pages)}"
         )
 
-        for page_number, page in enumerate(
-            reader.pages,
-            start=1
-        ):
+        for page_number, page in enumerate(reader.pages, start=1):
 
             try:
-
-                page_text = (
-                    page.extract_text() or ""
-                )
+                page_text = page.extract_text() or ""
 
                 if page_text.strip():
-
                     extracted_parts.append(
-                        page_text
+                        f"[Page {page_number}]\n{page_text}"
                     )
 
-                    print(
-                        f"[PDF] Page {page_number}: "
-                        f"{len(page_text)} chars"
-                    )
-
-            except Exception as e:
-
+            except Exception as page_error:
                 print(
-                    f"[PDF] Page {page_number} "
-                    f"PyPDF2 error: {e}"
+                    f"[PDF] Error extracting page "
+                    f"{page_number}: {page_error}"
                 )
 
     except Exception as e:
+        print(f"[PDF] Standard extraction error: {e}")
 
-        print(
-            f"[PDF] PyPDF2 failed: {e}"
-        )
-
-
-    # --------------------------------------------------------
-    # Method 2: pdfplumber
-    # --------------------------------------------------------
-
-    if sum(
-        len(x) for x in extracted_parts
-    ) < 1000:
-
-        try:
-
-            print(
-                "[PDF] Trying pdfplumber extraction"
-            )
-
-            with pdfplumber.open(
-                io.BytesIO(file_bytes)
-            ) as pdf:
-
-                plumber_parts = []
-
-                for page_number, page in enumerate(
-                    pdf.pages,
-                    start=1
-                ):
-
-                    try:
-
-                        page_text = (
-                            page.extract_text() or ""
-                        )
-
-                        if page_text.strip():
-
-                            plumber_parts.append(
-                                page_text
-                            )
-
-                            print(
-                                f"[PDFPLUMBER] Page "
-                                f"{page_number}: "
-                                f"{len(page_text)} chars"
-                            )
-
-                    except Exception as e:
-
-                        print(
-                            f"[PDFPLUMBER] "
-                            f"Page {page_number}: "
-                            f"{e}"
-                        )
-
-                plumber_text = "\n".join(
-                    plumber_parts
-                )
-
-                if len(plumber_text.strip()) > sum(
-                    len(x) for x in extracted_parts
-                ):
-
-                    extracted_parts = [
-                        plumber_text
-                    ]
-
-        except Exception as e:
-
-            print(
-                f"[PDFPLUMBER] Failed: {e}"
-            )
-
-
-    text = "\n".join(
-        extracted_parts
-    ).strip()
-
-
-    # --------------------------------------------------------
-    # OCR FALLBACK
-    # --------------------------------------------------------
-
-    # Important:
-    # A scanned resume may produce a few characters
-    # even though the page is actually an image.
-    #
-    # Therefore OCR is triggered below 1000 characters.
-
-    if len(text) < 1000:
-
-        print(
-            f"[PDF] Only {len(text)} characters found."
-        )
-
-        if not PDF2IMAGE_AVAILABLE:
-
-            print(
-                "[PDF OCR] pdf2image is not available"
-            )
-
-        else:
-
-            try:
-
-                print(
-                    "[PDF OCR] Converting PDF "
-                    "pages to images..."
-                )
-
-                images = convert_from_bytes(
-                    file_bytes,
-                    dpi=200
-                )
-
-                print(
-                    f"[PDF OCR] Converted "
-                    f"{len(images)} pages"
-                )
-
-                ocr_parts = []
-
-                for page_number, image in enumerate(
-                    images,
-                    start=1
-                ):
-
-                    print(
-                        f"[PDF OCR] OCR page "
-                        f"{page_number}"
-                    )
-
-                    page_text = run_ocr(
-                        image
-                    )
-
-                    if page_text.strip():
-
-                        ocr_parts.append(
-                            page_text
-                        )
-
-                ocr_text = "\n".join(
-                    ocr_parts
-                ).strip()
-
-                print(
-                    f"[PDF OCR] Total OCR text: "
-                    f"{len(ocr_text)} characters"
-                )
-
-                # Use OCR if it gives more text
-                if len(ocr_text) > len(text):
-
-                    text = ocr_text
-
-            except Exception as e:
-
-                print(
-                    f"[PDF OCR ERROR] {str(e)}"
-                )
-
-                traceback.print_exc()
-
+    text = clean_extracted_text(
+        "\n\n".join(extracted_parts)
+    )
 
     print(
-        f"[PDF] FINAL extracted text: "
+        f"[PDF] Standard extraction: "
         f"{len(text)} characters"
     )
 
-    return text
+    # --------------------------------------------------------
+    # OCR fallback
+    # --------------------------------------------------------
+
+    # If less than 100 meaningful characters were extracted,
+    # assume the PDF may be scanned.
+    if len(text.strip()) < 100:
+
+        if not PDF2IMAGE_AVAILABLE:
+            print(
+                "[PDF] pdf2image unavailable. "
+                "Cannot OCR scanned PDF."
+            )
+
+            return text
+
+        print(
+            "[PDF] Very little selectable text found. "
+            "Starting OCR..."
+        )
+
+        try:
+
+            images = convert_from_bytes(
+                file_bytes,
+                dpi=250,
+                fmt="png",
+            )
+
+            ocr_parts = []
+
+            for page_number, image in enumerate(
+                images,
+                start=1,
+            ):
+
+                print(
+                    f"[OCR] Processing PDF page "
+                    f"{page_number}/{len(images)}"
+                )
+
+                processed_image = preprocess_image_for_ocr(
+                    image
+                )
+
+                page_text = pytesseract.image_to_string(
+                    processed_image,
+                    config="--psm 6",
+                )
+
+                if page_text.strip():
+                    ocr_parts.append(
+                        f"[Page {page_number}]\n{page_text}"
+                    )
+
+            ocr_text = clean_extracted_text(
+                "\n\n".join(ocr_parts)
+            )
+
+            print(
+                f"[OCR] PDF OCR extracted "
+                f"{len(ocr_text)} characters"
+            )
+
+            # Prefer OCR if it found more information
+            if len(ocr_text) > len(text):
+                text = ocr_text
+
+        except Exception as e:
+            print(
+                f"[OCR] Scanned PDF OCR failed: {e}"
+            )
+
+    return clean_extracted_text(text)
 
 
 # ============================================================
-# 8. DOCX EXTRACTION
+# 9. DOCX EXTRACTION
 # ============================================================
 
-def extract_text_from_docx(
-    file_bytes: bytes
-) -> str:
-
-    parts = []
+def extract_text_from_docx(file_bytes: bytes) -> str:
+    """
+    Extract text from DOCX paragraphs AND tables.
+    """
 
     try:
-
-        print("[DOCX] Opening document")
 
         document = docx.Document(
             io.BytesIO(file_bytes)
         )
+
+        parts = []
 
         # ----------------------------------------------------
         # Paragraphs
@@ -518,170 +410,126 @@ def extract_text_from_docx(
             if text:
                 parts.append(text)
 
-
         # ----------------------------------------------------
         # Tables
         # ----------------------------------------------------
 
-        for table in document.tables:
+        for table_index, table in enumerate(
+            document.tables,
+            start=1,
+        ):
+
+            parts.append(
+                f"[Table {table_index}]"
+            )
 
             for row in table.rows:
 
-                row_text = []
+                cells = []
 
                 for cell in row.cells:
 
                     cell_text = cell.text.strip()
 
                     if cell_text:
-                        row_text.append(
-                            cell_text
-                        )
+                        cells.append(cell_text)
 
-                if row_text:
-
+                if cells:
                     parts.append(
-                        " | ".join(row_text)
+                        " | ".join(cells)
                     )
 
-
-        # ----------------------------------------------------
-        # Embedded images
-        # ----------------------------------------------------
-
-        # Some resumes are DOCX files where the actual
-        # content is inside screenshots/images.
-
-        try:
-
-            with zipfile.ZipFile(
-                io.BytesIO(file_bytes)
-            ) as z:
-
-                image_files = [
-                    name
-                    for name in z.namelist()
-                    if name.startswith(
-                        "word/media/"
-                    )
-                ]
-
-                print(
-                    f"[DOCX] Embedded images: "
-                    f"{len(image_files)}"
-                )
-
-                for image_name in image_files:
-
-                    try:
-
-                        image_data = z.read(
-                            image_name
-                        )
-
-                        image = Image.open(
-                            io.BytesIO(image_data)
-                        )
-
-                        ocr_text = run_ocr(
-                            image
-                        )
-
-                        if ocr_text.strip():
-
-                            parts.append(
-                                ocr_text
-                            )
-
-                    except Exception as e:
-
-                        print(
-                            f"[DOCX OCR] "
-                            f"{image_name}: {e}"
-                        )
-
-        except Exception as e:
-
-            print(
-                f"[DOCX] Image extraction error: "
-                f"{e}"
-            )
-
-
-        final_text = "\n".join(parts).strip()
-
-        print(
-            f"[DOCX] FINAL text: "
-            f"{len(final_text)} characters"
+        text = clean_extracted_text(
+            "\n".join(parts)
         )
 
-        return final_text
+        print(
+            f"[DOCX] Extracted "
+            f"{len(text)} characters"
+        )
+
+        return text
 
     except Exception as e:
 
         print(
-            f"[DOCX ERROR] {str(e)}"
+            f"[DOCX] Extraction error: {e}"
         )
-
-        traceback.print_exc()
 
         raise HTTPException(
             status_code=400,
-            detail="Invalid or corrupted DOCX file."
+            detail="Invalid or corrupted DOCX file.",
         )
 
 
 # ============================================================
-# 9. IMAGE EXTRACTION
+# 10. IMAGE OCR
 # ============================================================
 
 def extract_text_from_image(
-    file_bytes: bytes
+    file_bytes: bytes,
 ) -> str:
+    """
+    OCR JPG, JPEG and PNG images.
+    """
 
     try:
-
-        print("[IMAGE] Opening image")
 
         image = Image.open(
             io.BytesIO(file_bytes)
         )
 
-        text = run_ocr(image)
+        print(
+            f"[IMAGE] Original image size: "
+            f"{image.size}"
+        )
+
+        processed_image = preprocess_image_for_ocr(
+            image
+        )
+
+        # PSM 6 works well for blocks of text such as resumes.
+        text = pytesseract.image_to_string(
+            processed_image,
+            config="--psm 6",
+        )
+
+        text = clean_extracted_text(text)
 
         print(
-            f"[IMAGE] Extracted "
+            f"[OCR] Image extracted "
             f"{len(text)} characters"
         )
 
-        return text.strip()
+        return text
 
     except Exception as e:
 
         print(
-            f"[IMAGE ERROR] {str(e)}"
+            f"[IMAGE] OCR error: {e}"
         )
-
-        traceback.print_exc()
 
         raise HTTPException(
             status_code=400,
-            detail="Invalid or corrupted image file."
+            detail="Invalid or unreadable image file.",
         )
 
 
 # ============================================================
-# 10. TEXT FILE
+# 11. TXT EXTRACTION
 # ============================================================
 
 def extract_text_from_txt(
-    file_bytes: bytes
+    file_bytes: bytes,
 ) -> str:
+    """
+    Extract UTF-8 text, with fallback encodings.
+    """
 
     encodings = [
         "utf-8",
         "utf-8-sig",
-        "latin-1"
+        "latin-1",
     ]
 
     for encoding in encodings:
@@ -692,273 +540,484 @@ def extract_text_from_txt(
                 encoding
             )
 
-            return text.strip()
+            return clean_extracted_text(text)
 
         except UnicodeDecodeError:
             continue
 
-    return ""
+    raise HTTPException(
+        status_code=400,
+        detail="Unable to decode text file.",
+    )
 
 
 # ============================================================
-# 11. LOCAL SKILL FALLBACK
+# 12. DOCUMENT EXTRACTION ROUTER
 # ============================================================
 
-COMMON_SKILLS = [
+def extract_document_text(
+    file_bytes: bytes,
+    file_ext: str,
+) -> str:
 
-    # Programming
-    "Python",
-    "Java",
-    "JavaScript",
-    "TypeScript",
-    "C",
-    "C++",
-    "C#",
-    "R",
-    "SQL",
-    "HTML",
-    "CSS",
-    "PHP",
+    if file_ext == ".pdf":
+        return extract_text_from_pdf(
+            file_bytes
+        )
 
-    # Data
-    "Pandas",
-    "NumPy",
-    "Scikit-learn",
-    "TensorFlow",
-    "PyTorch",
-    "Power BI",
-    "Tableau",
-    "Excel",
-    "Power Query",
-    "DAX",
-    "Data Analytics",
-    "Data Analysis",
-    "Machine Learning",
-    "Deep Learning",
-    "Data Visualization",
+    if file_ext == ".docx":
+        return extract_text_from_docx(
+            file_bytes
+        )
 
-    # Cloud
-    "AWS",
-    "Azure",
-    "Google Cloud",
-    "GCP",
+    if file_ext == ".txt":
+        return extract_text_from_txt(
+            file_bytes
+        )
 
-    # Databases
-    "MySQL",
-    "PostgreSQL",
-    "SQL Server",
-    "Oracle",
-    "MongoDB",
+    if file_ext in {
+        ".png",
+        ".jpg",
+        ".jpeg",
+    }:
+        return extract_text_from_image(
+            file_bytes
+        )
 
-    # Web / frameworks
-    "FastAPI",
-    "Django",
-    "Flask",
-    "React",
-    "Node.js",
-
-    # Tools
-    "Git",
-    "GitHub",
-    "Docker",
-    "Linux",
-    "Jenkins",
-
-    # Engineering
-    "AutoCAD",
-    "MATLAB",
-    "Electrical Engineering",
-    "Electrical Design",
-    "Power Distribution",
-    "Power Systems",
-    "Solar",
-    "Renewable Energy",
-    "Project Management",
-
-    # Business
-    "QuickBooks",
-    "Microsoft Office",
-    "Word",
-    "PowerPoint",
-    "Outlook"
-]
+    raise HTTPException(
+        status_code=400,
+        detail="Unsupported file type.",
+    )
 
 
-def local_skill_fallback(
-    text: str
+# ============================================================
+# 13. SKILL NORMALIZATION
+# ============================================================
+
+def normalize_skill_name(
+    skill_name: str,
+) -> str:
+    """
+    Normalize common formatting variations without
+    changing the actual skill meaning.
+    """
+
+    if not skill_name:
+        return ""
+
+    name = skill_name.strip()
+
+    replacements = {
+        "ms excel": "Microsoft Excel",
+        "microsoft excel": "Microsoft Excel",
+        "ms word": "Microsoft Word",
+        "microsoft word": "Microsoft Word",
+        "powerbi": "Power BI",
+        "power bi": "Power BI",
+        "sql server": "Microsoft SQL Server",
+        "postgres": "PostgreSQL",
+        "postgresql": "PostgreSQL",
+        "js": "JavaScript",
+        "nodejs": "Node.js",
+        "node js": "Node.js",
+        "reactjs": "React",
+        "react.js": "React",
+        "py": "Python",
+        "machine learning": "Machine Learning",
+        "artificial intelligence": "Artificial Intelligence",
+    }
+
+    key = name.lower()
+
+    if key in replacements:
+        return replacements[key]
+
+    return name
+
+
+def deduplicate_skills(
+    skills: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
+    """
+    Remove duplicate skills while retaining the strongest
+    available evidence/confidence.
+    """
 
-    skills = []
+    merged = {}
 
-    text_lower = text.lower()
+    for skill in skills:
 
-    for skill in COMMON_SKILLS:
+        if not isinstance(skill, dict):
+            continue
 
-        if skill.lower() in text_lower:
+        name = normalize_skill_name(
+            str(skill.get("name", ""))
+        )
 
-            if skill in [
-                "Python",
-                "Java",
-                "JavaScript",
-                "TypeScript",
-                "C",
-                "C++",
-                "C#",
-                "R",
-                "SQL",
-                "HTML",
-                "CSS",
-                "PHP"
-            ]:
+        if not name:
+            continue
 
-                category = "Programming Language"
+        key = name.lower()
 
-            elif skill in [
-                "Pandas",
-                "NumPy",
-                "Scikit-learn",
-                "TensorFlow",
-                "PyTorch",
-                "FastAPI",
-                "Django",
-                "Flask",
-                "React",
-                "Node.js"
-            ]:
+        skill["name"] = name
 
-                category = "Framework/Library"
+        existing = merged.get(key)
 
-            elif skill in [
-                "Power BI",
-                "Tableau",
-                "Excel",
-                "Power Query",
-                "DAX",
-                "AutoCAD",
-                "MATLAB",
-                "Git",
-                "GitHub",
-                "Docker",
-                "Jenkins",
-                "QuickBooks",
-                "Microsoft Office",
-                "Word",
-                "PowerPoint",
-                "Outlook"
-            ]:
+        if existing is None:
+            merged[key] = skill
+            continue
 
-                category = "Tool/Software"
+        # Prefer higher confidence
+        current_confidence = float(
+            existing.get("confidence", 0)
+            or 0
+        )
 
-            elif skill in [
-                "Machine Learning",
-                "Deep Learning",
-                "Data Analytics",
-                "Data Analysis",
-                "Data Visualization",
-                "Electrical Engineering",
-                "Electrical Design",
-                "Power Distribution",
-                "Power Systems",
-                "Solar",
-                "Renewable Energy",
-                "Project Management"
-            ]:
+        new_confidence = float(
+            skill.get("confidence", 0)
+            or 0
+        )
 
-                category = "Domain Knowledge"
+        if new_confidence > current_confidence:
+            merged[key] = skill
 
-            else:
+        else:
 
-                category = "Technical Skill"
-
-            skills.append(
-                {
-                    "name": skill,
-                    "category": category,
-                    "confidence": 0.70
-                }
+            # Preserve evidence from both occurrences
+            old_evidence = existing.get(
+                "evidence",
+                "",
             )
 
-    return skills
+            new_evidence = skill.get(
+                "evidence",
+                "",
+            )
+
+            if new_evidence and new_evidence not in old_evidence:
+                existing["evidence"] = (
+                    f"{old_evidence}; {new_evidence}"
+                    if old_evidence
+                    else new_evidence
+                )
+
+    return list(merged.values())
 
 
 # ============================================================
-# 12. GROQ SKILL EXTRACTION
+# 14. COMPREHENSIVE AI EXTRACTION
 # ============================================================
 
 async def extract_skills_with_llm(
-    text: str
+    text: str,
 ) -> dict:
 
-    # Limit extremely large documents so that
-    # the model receives a manageable prompt.
+    # Protect the API from pathological input sizes.
+    # We keep a large amount of resume content while preventing
+    # extremely large uploads from consuming the entire context.
+    MAX_TEXT_CHARS = 60000
 
-    MAX_TEXT = 50000
-
-    full_text = text[:MAX_TEXT]
-
-    print(
-        f"[SKILLS] Sending "
-        f"{len(full_text)} characters to Groq"
-    )
+    full_text = text[:MAX_TEXT_CHARS]
 
     prompt = f"""
-You are an expert technical recruiter and resume parser.
+You are an expert technical recruiter, resume parser,
+career counselor and skills taxonomy specialist.
 
-Analyze the following document and extract EVERY skill,
-technology, software, programming language, framework,
-domain skill, methodology, standard, certification and
-important professional competency.
+Analyze the COMPLETE document below.
 
-IMPORTANT RULES:
+Your goal is to build a comprehensive professional profile
+from the document.
 
-1. Extract skills explicitly mentioned in the document.
-2. Do NOT return an empty list if skills are clearly present.
-3. Scan the ENTIRE document.
-4. Look at:
-   - Summary
-   - Skills
-   - Work Experience
-   - Education
-   - Certifications
-   - Projects
-   - Job descriptions
-   - Tables
-5. Extract individual technologies separately.
-6. Do not combine Python, SQL and Power BI into "Data Analytics".
-7. If "Microsoft Excel" appears, extract Excel.
-8. If "Power BI" appears, extract Power BI.
-9. If "AutoCAD" appears, extract AutoCAD.
-10. If "Electrical Power Distribution" appears, extract it.
-11. Do not invent skills that are not supported by the document.
+DO NOT return only the skills from a "Skills" section.
 
-Use these categories:
+You MUST inspect ALL available sections including:
 
-- Programming Language
-- Framework/Library
-- Tool/Software
-- Domain Knowledge
-- Methodology/Standard
-- Soft Skill
-- Certification
+- Professional Summary
+- Objective
+- Skills
+- Technical Skills
+- Work Experience
+- Employment
+- Education
+- Degrees
+- Courses
+- Certifications
+- Training
+- Projects
+- Internships
+- Research
+- Publications
+- Volunteer Experience
+- Achievements
+- Responsibilities
+- Job descriptions
+- Technologies mentioned inside sentences
 
-Return ONLY this JSON structure:
+============================================================
+SKILL EXTRACTION
+============================================================
+
+Extract EVERY meaningful skill that is explicitly supported
+by the document.
+
+Do NOT unnecessarily group skills.
+
+For example, if the document says:
+
+"Used Python, Pandas, NumPy, SQL and Power BI"
+
+extract:
+
+Python
+Pandas
+NumPy
+SQL
+Power BI
+
+Do NOT return only:
+
+Data Analytics
+
+However, broader domain skills should ALSO be extracted when
+explicitly supported.
+
+Examples:
+
+Python
+Pandas
+NumPy
+SQL
+Data Analysis
+
+============================================================
+SKILL CATEGORIES
+============================================================
+
+Use one of these categories whenever possible:
+
+Programming Language
+Framework/Library
+Tool/Software
+Database
+Cloud Technology
+Data/Analytics
+AI/Machine Learning
+Engineering
+Domain Knowledge
+Methodology/Standard
+Project Management
+Business
+Communication
+Leadership
+Soft Skill
+Certification
+Other Technical Skill
+
+============================================================
+DO NOT INVENT
+============================================================
+
+Only extract information supported by the document.
+
+Do not assume a person knows a technology simply because
+another technology normally requires it.
+
+Do not infer Python just because someone is a data analyst.
+
+Do not infer AWS just because someone worked in cloud computing.
+
+============================================================
+PROFICIENCY
+============================================================
+
+Determine proficiency only when evidence exists.
+
+Allowed values:
+
+beginner
+intermediate
+advanced
+expert
+unknown
+
+If the document does not provide enough evidence,
+use "unknown".
+
+============================================================
+CONFIDENCE
+============================================================
+
+Use a number between 0 and 1.
+
+0.95-1.00:
+Very clearly stated.
+
+0.80-0.94:
+Strong evidence.
+
+0.60-0.79:
+Reasonable explicit evidence.
+
+Below 0.60:
+Use only if there is still explicit supporting evidence.
+
+Do not invent skills merely to increase the number.
+
+============================================================
+EVIDENCE
+============================================================
+
+For every skill, provide a short evidence string showing
+WHY the skill was extracted.
+
+Example:
+
+"Used Python and Pandas for data analysis projects."
+
+============================================================
+CERTIFICATIONS
+============================================================
+
+Extract every certification mentioned.
+
+For each certification identify:
+
+name
+provider
+credential_id
+verification_url
+status
+
+============================================================
+EDUCATION
+============================================================
+
+Extract:
+
+degree
+institution
+field_of_study
+graduation_year
+
+============================================================
+WORK EXPERIENCE
+============================================================
+
+Extract:
+
+job_title
+company
+start_date
+end_date
+responsibilities
+technologies_used
+
+============================================================
+PROJECTS
+============================================================
+
+Extract:
+
+project_name
+description
+technologies
+skills_demonstrated
+
+============================================================
+ONGOING LEARNING
+============================================================
+
+Identify courses, training programs and learning activities
+that appear to be ongoing.
+
+============================================================
+OUTPUT
+============================================================
+
+Return ONLY valid JSON.
+
+Use EXACTLY this structure:
 
 {{
-  "skills": [
+  "document_type": "resume|cv|certificate|course_document|other",
+
+  "candidate_profile": {{
+    "name": "",
+    "professional_summary": ""
+  }},
+
+  "education": [
     {{
-      "name": "Python",
-      "category": "Programming Language",
-      "confidence": 0.98
+      "degree": "",
+      "institution": "",
+      "field_of_study": "",
+      "graduation_year": ""
     }}
   ],
-  "explanations": [
+
+  "work_experience": [
     {{
-      "skill": "Python",
-      "reasoning": "Python is explicitly mentioned in the document.",
-      "evidence": "Exact relevant text from the document."
+      "job_title": "",
+      "company": "",
+      "start_date": "",
+      "end_date": "",
+      "responsibilities": [],
+      "technologies_used": []
     }}
-  ]
+  ],
+
+  "projects": [
+    {{
+      "project_name": "",
+      "description": "",
+      "technologies": [],
+      "skills_demonstrated": []
+    }}
+  ],
+
+  "certifications": [
+    {{
+      "name": "",
+      "provider": "",
+      "credential_id": "",
+      "verification_url": "",
+      "status": ""
+    }}
+  ],
+
+  "courses_and_training": [
+    {{
+      "name": "",
+      "provider": "",
+      "status": "",
+      "completion_date": ""
+    }}
+  ],
+
+  "skills": [
+    {{
+      "name": "",
+      "category": "",
+      "proficiency_level": "beginner|intermediate|advanced|expert|unknown",
+      "confidence": 0.0,
+      "evidence": ""
+    }}
+  ],
+
+  "key_strengths": [],
+
+  "skill_gaps_explicitly_mentioned": [],
+
+  "keywords": []
 }}
+
+IMPORTANT:
+
+1. Extract all explicitly supported skills.
+2. Preserve specific technologies.
+3. Do not collapse specific technologies into broad categories.
+4. Do not invent unsupported skills.
+5. Return valid JSON only.
 
 DOCUMENT:
 
@@ -967,190 +1026,92 @@ DOCUMENT:
 
     try:
 
-        response = await llm_generate(
+        llm_response = await llm_generate(
             prompt,
-            max_tokens_override=4096
+            max_tokens_override=8192,
         )
 
-        print(
-            f"[SKILLS] Raw Groq response:"
+        data = json.loads(
+            llm_response
         )
 
-        print(
-            response[:2000]
-        )
-
-        # Clean accidental markdown
-        response = response.strip()
-
-        if response.startswith(
-            "```json"
-        ):
-
-            response = response[
-                7:
-            ].strip()
-
-        if response.endswith(
-            "```"
-        ):
-
-            response = response[
-                :-3
-            ].strip()
-
-        skills_data = json.loads(
-            response
-        )
-
-        if not isinstance(
-            skills_data,
-            dict
-        ):
-
+        if not isinstance(data, dict):
             raise ValueError(
-                "Groq response is not a JSON object"
+                "LLM returned JSON that is not an object."
             )
 
-        skills = skills_data.get(
+        skills = data.get(
             "skills",
-            []
+            [],
         )
 
-        explanations = skills_data.get(
-            "explanations",
-            []
-        )
-
-        if not isinstance(
-            skills,
-            list
-        ):
-
+        if not isinstance(skills, list):
             skills = []
 
-        if not isinstance(
-            explanations,
-            list
-        ):
-
-            explanations = []
-
-        print(
-            f"[SKILLS] Groq extracted "
-            f"{len(skills)} skills"
+        skills = deduplicate_skills(
+            skills
         )
 
-        # ----------------------------------------------------
-        # Local fallback if Groq returns nothing
-        # ----------------------------------------------------
+        data["skills"] = skills
 
-        if len(skills) == 0:
+        print(
+            f"[SKILLS] Successfully extracted "
+            f"{len(skills)} unique skills"
+        )
 
-            print(
-                "[SKILLS] Groq returned ZERO skills."
-            )
-
-            print(
-                "[SKILLS] Running local skill fallback..."
-            )
-
-            fallback_skills = (
-                local_skill_fallback(
-                    full_text
-                )
-            )
-
-            if fallback_skills:
-
-                skills = fallback_skills
-
-                explanations = [
-                    {
-                        "skill": item["name"],
-                        "reasoning": (
-                            "Skill detected by "
-                            "local document analysis."
-                        ),
-                        "evidence": item["name"]
-                    }
-                    for item in fallback_skills
-                ]
-
-                print(
-                    f"[SKILLS] Local fallback found "
-                    f"{len(skills)} skills"
-                )
-
-        return {
-            "skills": skills,
-            "explanations": explanations
-        }
+        return data
 
     except json.JSONDecodeError as e:
 
         print(
-            f"[SKILLS] JSON parsing failed: {e}"
+            f"[ERROR] JSON Decode Error: {e}"
         )
 
         print(
-            "[SKILLS] Running local fallback"
-        )
-
-        fallback_skills = (
-            local_skill_fallback(
-                full_text
-            )
+            f"[ERROR] Raw LLM response: "
+            f"{llm_response[:2000] if 'llm_response' in locals() else 'N/A'}"
         )
 
         return {
-            "skills": fallback_skills,
-            "explanations": [
-                {
-                    "skill": item["name"],
-                    "reasoning": (
-                        "Detected by local "
-                        "fallback analysis."
-                    ),
-                    "evidence": item["name"]
-                }
-                for item in fallback_skills
-            ]
+            "document_type": "other",
+            "candidate_profile": {},
+            "education": [],
+            "work_experience": [],
+            "projects": [],
+            "certifications": [],
+            "courses_and_training": [],
+            "skills": [],
+            "key_strengths": [],
+            "skill_gaps_explicitly_mentioned": [],
+            "keywords": [],
         }
 
     except Exception as e:
 
         print(
-            f"[SKILLS] LLM processing error: "
+            f"[ERROR] LLM skill extraction failed: "
             f"{str(e)}"
         )
 
         traceback.print_exc()
 
-        fallback_skills = (
-            local_skill_fallback(
-                full_text
-            )
-        )
-
         return {
-            "skills": fallback_skills,
-            "explanations": [
-                {
-                    "skill": item["name"],
-                    "reasoning": (
-                        "Detected by local "
-                        "fallback analysis."
-                    ),
-                    "evidence": item["name"]
-                }
-                for item in fallback_skills
-            ]
+            "document_type": "other",
+            "candidate_profile": {},
+            "education": [],
+            "work_experience": [],
+            "projects": [],
+            "certifications": [],
+            "courses_and_training": [],
+            "skills": [],
+            "key_strengths": [],
+            "skill_gaps_explicitly_mentioned": [],
+            "keywords": [],
         }
 
 
 # ============================================================
-# 13. ROOT
+# 15. ROOT
 # ============================================================
 
 @app.get("/")
@@ -1158,23 +1119,62 @@ def read_root():
 
     return {
         "status": "Skills Pathfinder API is online.",
-        "version": "1.1.0"
+        "version": "1.2.0",
     }
 
 
 # ============================================================
-# 14. UPLOAD DOCUMENT
+# 16. HEALTH / ENVIRONMENT
+# ============================================================
+
+@app.get("/debug-env")
+def debug_env():
+
+    return {
+        "groq_key_set": bool(
+            os.getenv("GROQ_API_KEY")
+        ),
+
+        "groq_model": GROQ_MODEL,
+
+        "supabase_configured": bool(
+            os.getenv("SUPABASE_URL")
+            and os.getenv("SUPABASE_KEY")
+        ),
+
+        "tesseract_command": (
+            pytesseract.pytesseract.tesseract_cmd
+            if pytesseract.pytesseract.tesseract_cmd
+            else "default"
+        ),
+
+        "pdf2image_available": PDF2IMAGE_AVAILABLE,
+    }
+
+
+# ============================================================
+# 17. DOCUMENT UPLOAD
 # ============================================================
 
 @app.post("/api/upload")
 async def upload_document(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
+
+    filename = (
+        file.filename
+        or "unknown"
+    )
+
+    print(
+        f"[UPLOAD] Received file: "
+        f"{filename}"
+    )
 
     try:
 
         # ----------------------------------------------------
-        # Supported files
+        # Validate extension
         # ----------------------------------------------------
 
         allowed_extensions = {
@@ -1183,28 +1183,12 @@ async def upload_document(
             ".png",
             ".jpeg",
             ".jpg",
-            ".txt"
+            ".txt",
         }
-
-        filename = (
-            file.filename
-            or "unknown"
-        )
 
         file_ext = os.path.splitext(
             filename
         )[1].lower()
-
-        print("=" * 70)
-
-        print(
-            f"[UPLOAD] File: {filename}"
-        )
-
-        print(
-            f"[UPLOAD] Extension: {file_ext}"
-        )
-
 
         if file_ext not in allowed_extensions:
 
@@ -1212,11 +1196,10 @@ async def upload_document(
                 status_code=400,
                 detail=(
                     "Unsupported file type. "
-                    "Allowed: PDF, DOCX, PNG, "
-                    "JPG, JPEG, TXT"
-                )
+                    "Allowed: PDF, DOCX, TXT, "
+                    "PNG, JPG, JPEG."
+                ),
             )
-
 
         # ----------------------------------------------------
         # Read file
@@ -1224,133 +1207,87 @@ async def upload_document(
 
         file_bytes = await file.read()
 
-        file_size = len(
-            file_bytes
-        )
+        file_size = len(file_bytes)
 
         print(
             f"[UPLOAD] File size: "
-            f"{file_size} bytes"
+            f"{file_size:,} bytes"
         )
 
+        # 15 MB limit
+        MAX_FILE_SIZE = 15 * 1024 * 1024
 
-        if file_size == 0:
-
-            raise HTTPException(
-                status_code=400,
-                detail="Uploaded file is empty."
-            )
-
-
-        if file_size > (
-            15 * 1024 * 1024
-        ):
+        if file_size > MAX_FILE_SIZE:
 
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "File size exceeds "
                     "15MB limit."
-                )
+                ),
             )
 
+        if file_size == 0:
+
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file is empty.",
+            )
 
         # ----------------------------------------------------
         # Extract text
         # ----------------------------------------------------
 
-        if file_ext == ".pdf":
-
-            text = extract_text_from_pdf(
-                file_bytes
-            )
-
-        elif file_ext == ".docx":
-
-            text = extract_text_from_docx(
-                file_bytes
-            )
-
-        elif file_ext == ".txt":
-
-            text = extract_text_from_txt(
-                file_bytes
-            )
-
-        elif file_ext in {
-            ".png",
-            ".jpg",
-            ".jpeg"
-        }:
-
-            text = extract_text_from_image(
-                file_bytes
-            )
-
-        else:
-
-            text = ""
-
-
-        text = text.strip()
-
         print(
-            f"[UPLOAD] FINAL extracted text: "
-            f"{len(text)} characters"
+            f"[EXTRACT] Processing "
+            f"{file_ext} file..."
         )
 
-        print(
-            f"[UPLOAD] Text preview:"
+        text = extract_document_text(
+            file_bytes,
+            file_ext,
         )
 
-        print(
-            text[:1000]
+        text = clean_extracted_text(
+            text
         )
 
+        character_count = len(text)
 
-        # ----------------------------------------------------
-        # Validate extraction
-        # ----------------------------------------------------
+        print(
+            f"[EXTRACT] Final text length: "
+            f"{character_count} characters"
+        )
 
-        if not text or len(
-            text.strip()
-        ) < 10:
+        if character_count < 10:
 
-            return JSONResponse(
+            raise HTTPException(
                 status_code=400,
-                content={
-                    "detail": (
-                        "Could not extract meaningful "
-                        "text from this document. "
-                        "The file may be blank, "
-                        "image-only, encrypted, "
-                        "or unreadable."
-                    ),
-                    "filename": filename,
-                    "character_count": len(text)
-                }
+                detail=(
+                    "Could not extract meaningful text "
+                    "from this document. "
+                    "The file may be blank, corrupted, "
+                    "or contain text that OCR cannot read."
+                ),
             )
 
-
         # ----------------------------------------------------
-        # LLM skill analysis
+        # AI extraction
         # ----------------------------------------------------
 
         print(
-            "[UPLOAD] Starting skill analysis..."
+            "[AI] Starting comprehensive "
+            "document analysis..."
         )
 
-        skills_data = (
-            await extract_skills_with_llm(
-                text
-            )
+        analysis = await extract_skills_with_llm(
+            text
         )
 
-        skills = skills_data.get(
+        skills = analysis.get(
             "skills",
-            []
+            [],
         )
-
 
         # ----------------------------------------------------
         # Career recommendations
@@ -1361,41 +1298,104 @@ async def upload_document(
             recommendations = (
                 get_career_recommendations(
                     skills,
-                    top_n=5
+                    top_n=5,
                 )
             )
 
-        except Exception as e:
+        except Exception as recommendation_error:
 
             print(
-                f"[RECOMMENDATION ERROR] "
-                f"{e}"
+                "[WARN] Career recommendation "
+                f"error: {recommendation_error}"
             )
 
             recommendations = []
 
+        # ----------------------------------------------------
+        # Final response
+        # ----------------------------------------------------
 
-        print(
-            f"[UPLOAD] FINAL skills: "
-            f"{len(skills)}"
-        )
+        response = {
 
-        print("=" * 70)
-
-
-        return {
-            "message": "File processed successfully",
-            "filename": filename,
-            "extracted_skills": skills,
-            "explanations": skills_data.get(
-                "explanations",
-                []
+            "message": (
+                "File processed successfully"
             ),
+
+            "filename": filename,
+
+            "file_type": file_ext,
+
+            "character_count": character_count,
+
+            "extracted_skills": skills,
+
+            "skills_count": len(skills),
+
+            "explanations": analysis.get(
+                "skills",
+                [],
+            ),
+
             "recommendations": recommendations,
-            "character_count": len(text),
-            "text_preview": text[:500]
+
+            "document_type": analysis.get(
+                "document_type",
+                "other",
+            ),
+
+            "candidate_profile": analysis.get(
+                "candidate_profile",
+                {},
+            ),
+
+            "education": analysis.get(
+                "education",
+                [],
+            ),
+
+            "work_experience": analysis.get(
+                "work_experience",
+                [],
+            ),
+
+            "projects": analysis.get(
+                "projects",
+                [],
+            ),
+
+            "certifications": analysis.get(
+                "certifications",
+                [],
+            ),
+
+            "courses_and_training": analysis.get(
+                "courses_and_training",
+                [],
+            ),
+
+            "key_strengths": analysis.get(
+                "key_strengths",
+                [],
+            ),
+
+            "skill_gaps_explicitly_mentioned": analysis.get(
+                "skill_gaps_explicitly_mentioned",
+                [],
+            ),
+
+            "keywords": analysis.get(
+                "keywords",
+                [],
+            ),
         }
 
+        print(
+            f"[SUCCESS] {filename}: "
+            f"{character_count} characters, "
+            f"{len(skills)} skills"
+        )
+
+        return response
 
     except HTTPException:
         raise
@@ -1405,71 +1405,63 @@ async def upload_document(
         traceback.print_exc()
 
         print(
-            f"[UPLOAD ERROR] {str(e)}"
+            f"[ERROR] Unexpected upload error: "
+            f"{str(e)}"
         )
 
         return JSONResponse(
             status_code=500,
             content={
                 "detail": (
-                    f"Server error processing "
-                    f"file: {str(e)}"
+                    "Server error processing file: "
+                    f"{str(e)}"
                 ),
-                "partial": True
-            }
+                "partial": True,
+            },
         )
 
 
 # ============================================================
-# 15. CERTIFICATE VERIFICATION
+# 18. CERTIFICATE VERIFICATION
 # ============================================================
 
 @app.post("/api/verify-certificate")
 async def verify_certificate(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
+
+    filename = (
+        file.filename
+        or "certificate"
+    )
 
     try:
 
         file_bytes = await file.read()
 
-        filename = (
-            file.filename
-            or "certificate"
-        )
-
         file_ext = os.path.splitext(
             filename
         )[1].lower()
 
-
-        if file_ext == ".pdf":
-
-            text = extract_text_from_pdf(
-                file_bytes
-            )
-
-        elif file_ext in {
+        if file_ext not in {
+            ".pdf",
             ".png",
             ".jpg",
-            ".jpeg"
+            ".jpeg",
         }:
-
-            text = extract_text_from_image(
-                file_bytes
-            )
-
-        else:
 
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Unsupported certificate "
-                    "file. Use PDF, PNG, JPG "
-                    "or JPEG."
-                )
+                    "Unsupported certificate file. "
+                    "Use PDF, PNG, JPG or JPEG."
+                ),
             )
 
+        text = extract_document_text(
+            file_bytes,
+            file_ext,
+        )
 
         if not text.strip():
 
@@ -1478,37 +1470,44 @@ async def verify_certificate(
                 detail=(
                     "Could not extract text "
                     "from certificate."
-                )
+                ),
             )
 
-
         prompt = f"""
-Extract certificate information from the text below.
+Extract certificate information from the following text.
 
-Return ONLY JSON:
+Return ONLY valid JSON.
+
+Required structure:
 
 {{
   "certification_name": "",
   "provider": "",
   "credential_id": "",
-  "verification_url": ""
+  "verification_url": "",
+  "certificate_status": ""
 }}
 
-Certificate text:
+Rules:
+
+- Do not invent information.
+- If a field is not present, return an empty string.
+- Preserve credential IDs exactly.
+- Preserve URLs exactly when possible.
+
+Certificate Text:
 
 {text}
 """
 
-
         llm_response = await llm_generate(
             prompt,
-            max_tokens_override=1024
+            max_tokens_override=2048,
         )
 
         cert_data = json.loads(
             llm_response
         )
-
 
         if not cert_data.get(
             "certification_name"
@@ -1520,7 +1519,6 @@ Certificate text:
                 filename
             )[0]
 
-
         if not cert_data.get(
             "provider"
         ):
@@ -1529,46 +1527,42 @@ Certificate text:
                 "provider"
             ] = "Unknown"
 
+        # ----------------------------------------------------
+        # Automatic URL recognition
+        # ----------------------------------------------------
 
         verification_url = (
             cert_data.get(
-                "verification_url"
+                "verification_url",
+                "",
             )
             or ""
         )
 
-
         if verification_url:
 
-            if re.search(
-                r"""
-                (
-                    aws\.amazon\.com|
-                    coursera\.org|
-                    udemy\.com|
-                    edx\.org|
-                    google\.com|
-                    microsoft\.com|
-                    cisco\.com|
-                    comptia\.org|
-                    credly\.com|
-                    credential\.net
+            known_domains = (
+                r"(aws\.amazon\.com|"
+                r"coursera\.org|"
+                r"udemy\.com|"
+                r"edx\.org|"
+                r"google\.com|"
+                r"microsoft\.com|"
+                r"cisco\.com|"
+                r"comptia\.org|"
+                r"credly\.com|"
+                r"credential\.net)"
+            )
+
+            cert_data[
+                "auto_verified"
+            ] = bool(
+                re.search(
+                    known_domains,
+                    verification_url,
+                    re.IGNORECASE,
                 )
-                """,
-                verification_url,
-                re.IGNORECASE |
-                re.VERBOSE
-            ):
-
-                cert_data[
-                    "auto_verified"
-                ] = True
-
-            else:
-
-                cert_data[
-                    "auto_verified"
-                ] = False
+            )
 
         else:
 
@@ -1576,9 +1570,7 @@ Certificate text:
                 "auto_verified"
             ] = False
 
-
         return cert_data
-
 
     except HTTPException:
         raise
@@ -1590,14 +1582,14 @@ Certificate text:
         raise HTTPException(
             status_code=500,
             detail=(
-                f"Error processing "
-                f"certificate: {str(e)}"
-            )
+                "Error processing certificate: "
+                f"{str(e)}"
+            ),
         )
 
 
 # ============================================================
-# 16. SKILLS REQUEST
+# 19. SKILL REQUEST MODEL
 # ============================================================
 
 class SkillsRequest(BaseModel):
@@ -1608,12 +1600,12 @@ class SkillsRequest(BaseModel):
 
 
 # ============================================================
-# 17. RECOMMENDATIONS
+# 20. CAREER RECOMMENDATIONS
 # ============================================================
 
 @app.post("/api/recommendations")
 async def get_recommendations(
-    skills_request: SkillsRequest
+    skills_request: SkillsRequest,
 ):
 
     try:
@@ -1621,7 +1613,7 @@ async def get_recommendations(
         recommendations = (
             get_career_recommendations(
                 skills_request.extracted_skills,
-                top_n=5
+                top_n=5,
             )
         )
 
@@ -1630,8 +1622,11 @@ async def get_recommendations(
             "total_recommendations": len(
                 recommendations
             ),
-            "recommendations": recommendations
+            "recommendations": recommendations,
         }
+
+    except HTTPException:
+        raise
 
     except Exception as e:
 
@@ -1640,21 +1635,21 @@ async def get_recommendations(
         raise HTTPException(
             status_code=500,
             detail=(
-                f"Error generating "
-                f"recommendations: {str(e)}"
-            )
+                "Error generating recommendations: "
+                f"{str(e)}"
+            ),
         )
 
 
 # ============================================================
-# 18. CAREER PATHS
+# 21. CAREER PATHS
 # ============================================================
 
 @app.get("/api/career-paths")
 async def get_all_career_paths():
 
     from recommendation_engine import (
-        CAREER_PATHS
+        CAREER_PATHS,
     )
 
     career_list = [
@@ -1668,7 +1663,7 @@ async def get_all_career_paths():
             ],
             "median_salary": career[
                 "median_salary"
-            ]
+            ],
         }
 
         for career in CAREER_PATHS
@@ -1676,41 +1671,39 @@ async def get_all_career_paths():
 
     return {
         "status": "success",
-        "career_paths": career_list
+        "career_paths": career_list,
     }
 
 
 # ============================================================
-# 19. SKILL GAP ANALYSIS
+# 22. SKILL GAP ANALYSIS
 # ============================================================
 
 @app.post("/api/skill-gap-analysis")
 async def skill_gap_analysis(
     skills_request: SkillsRequest,
-    career_id: str
+    career_id: str,
 ):
 
     try:
 
-        from recommendation_engine import (
-            get_skill_gap_analysis
-        )
-
-        analysis = get_skill_gap_analysis(
-            skills_request.extracted_skills,
-            career_id
+        analysis = (
+            get_skill_gap_analysis(
+                skills_request.extracted_skills,
+                career_id,
+            )
         )
 
         if not analysis:
 
             raise HTTPException(
                 status_code=404,
-                detail="Career path not found"
+                detail="Career path not found",
             )
 
         return {
             "status": "success",
-            "analysis": analysis
+            "analysis": analysis,
         }
 
     except HTTPException:
@@ -1718,48 +1711,22 @@ async def skill_gap_analysis(
 
     except Exception as e:
 
-        traceback.print_exc()
+        print(
+            f"[ERROR] Skill gap analysis: "
+            f"{str(e)}"
+        )
 
         raise HTTPException(
             status_code=500,
             detail=(
-                f"Error analyzing "
-                f"skill gap: {str(e)}"
-            )
+                "Error analyzing skill gap: "
+                f"{str(e)}"
+            ),
         )
 
 
 # ============================================================
-# 20. DEBUG ENVIRONMENT
-# ============================================================
-
-@app.get("/debug-env")
-def debug_env():
-
-    return {
-
-        "groq_key_set": bool(
-            os.getenv("GROQ_API_KEY")
-        ),
-
-        "groq_model": GROQ_MODEL,
-
-        "supabase_configured": bool(
-            os.getenv("SUPABASE_URL")
-            and
-            os.getenv("SUPABASE_KEY")
-        ),
-
-        "tesseract_command": TESSERACT_CMD,
-
-        "pdf2image_available":
-            PDF2IMAGE_AVAILABLE
-
-    }
-
-
-# ============================================================
-# 21. CAREER ADVICE
+# 23. CAREER REPORT
 # ============================================================
 
 class ReportRequest(BaseModel):
@@ -1769,26 +1736,21 @@ class ReportRequest(BaseModel):
 
 @app.post("/api/generate-career-advice")
 async def generate_career_advice(
-    request: ReportRequest
+    request: ReportRequest,
 ):
 
     try:
 
-        skills_text = ", ".join(
-            request.skills
+        skills_text = (
+            ", ".join(request.skills)
+            if request.skills
+            else "No skills provided"
         )
-
-        if not skills_text:
-
-            skills_text = (
-                "No skills provided"
-            )
-
 
         prompt = f"""
 You are an expert Career Coach and Talent Analyst.
 
-Based on these skills:
+Based on the following skills:
 
 [{skills_text}]
 
@@ -1809,28 +1771,27 @@ Required structure:
   "action_plan": {{
     "30_days": "",
     "60_days": "",
-    "90_days": ""
+    "90_days": "",
+    "6_months": "",
+    "1_year": ""
   }},
   "recommended_next_skills": []
 }}
 """
 
-
         llm_response = await llm_generate(
             prompt,
-            max_tokens_override=2048
+            max_tokens_override=4096,
         )
 
         advice_data = json.loads(
             llm_response
         )
 
-
         return {
             "status": "success",
-            "advice": advice_data
+            "advice": advice_data,
         }
-
 
     except HTTPException:
         raise
@@ -1842,16 +1803,42 @@ Required structure:
         raise HTTPException(
             status_code=500,
             detail=(
-                f"Error generating "
-                f"career advice: {str(e)}"
-            )
+                "Error generating career advice: "
+                f"{str(e)}"
+            ),
         )
 
 
 # ============================================================
-# END
+# 24. STARTUP INFORMATION
 # ============================================================
 
-print("=" * 70)
-print("SKILLS PATHFINDER BACKEND READY")
-print("=" * 70)
+@app.on_event("startup")
+async def startup_event():
+
+    print("=" * 60)
+    print("Skills Pathfinder Backend")
+    print("Version: 1.2.0")
+    print("=" * 60)
+
+    print(
+        f"Tesseract: "
+        f"{pytesseract.pytesseract.tesseract_cmd}"
+    )
+
+    print(
+        f"PDF OCR available: "
+        f"{PDF2IMAGE_AVAILABLE}"
+    )
+
+    print(
+        f"Groq model: "
+        f"{GROQ_MODEL}"
+    )
+
+    print(
+        f"Supabase configured: "
+        f"{bool(SUPABASE_URL and SUPABASE_KEY)}"
+    )
+
+    print("=" * 60)
