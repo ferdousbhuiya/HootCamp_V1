@@ -4,8 +4,9 @@ This module extends the original FastAPI application with:
 - resilient Groq JSON handling;
 - the expanded career catalog;
 - conservative certificate verification;
-- safe verification-link rechecks; and
-- structured career-development plans.
+- safe verification-link rechecks;
+- structured career-development plans; and
+- a profile-aware student career advisor.
 """
 
 import json
@@ -323,6 +324,93 @@ Be practical, specific, and concise.
     return {"status": "success", "advice": json.loads(response)}
 
 
+class CareerAdvisorRequest(BaseModel):
+    question: str = Field(min_length=2, max_length=1200)
+    profile: Dict[str, Any] = Field(default_factory=dict)
+    skills: List[Dict[str, Any]] = Field(default_factory=list)
+    certifications: List[Dict[str, Any]] = Field(default_factory=list)
+    courses: List[Dict[str, Any]] = Field(default_factory=list)
+    career_recommendations: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+async def career_advisor(request: CareerAdvisorRequest):
+    """Answer a student's career question using only the supplied structured profile."""
+    compact_skills = [
+        {
+            "name": item.get("skill_name") or item.get("name"),
+            "category": item.get("category"),
+            "proficiency": item.get("proficiency_level"),
+            "status": item.get("status"),
+            "source": item.get("source"),
+            "verification": item.get("verification_status"),
+            "confidence": item.get("confidence"),
+        }
+        for item in request.skills[:120]
+        if item.get("skill_name") or item.get("name")
+    ]
+    compact_certs = [
+        {
+            "name": item.get("certification_name"),
+            "provider": item.get("provider"),
+            "verified": bool(item.get("is_verified")),
+            "verification_status": item.get("verification_status"),
+            "status": item.get("status"),
+        }
+        for item in request.certifications[:30]
+    ]
+    compact_courses = [
+        {
+            "name": item.get("course_name"),
+            "provider": item.get("provider"),
+            "status": item.get("status"),
+            "expected_completion_date": item.get("expected_completion_date"),
+        }
+        for item in request.courses[:30]
+    ]
+    compact_careers = [
+        {
+            "title": item.get("career_title") or item.get("path"),
+            "match_percentage": item.get("match_percentage"),
+            "matched_skills": item.get("matched_skills", []),
+            "missing_skills": item.get("missing_skills", []),
+            "regulated": (item.get("recommendation_data") or {}).get("regulated"),
+        }
+        for item in request.career_recommendations[:8]
+    ]
+
+    prompt = f"""
+You are the Skills Pathfinder Career Advisor. Answer the student's question from the structured profile below.
+
+Rules:
+- Ground the answer in the supplied profile. Do not claim the student has a skill, degree, certificate, license, or experience that is not present.
+- Clearly distinguish verified certificate evidence, AI-extracted evidence, self-reported skills, and ongoing learning when relevant.
+- If a role is regulated or normally requires licensing/education, explicitly say that skills alone do not satisfy that requirement.
+- Do not recommend repeating an ongoing course unless there is a specific reason.
+- When the profile does not contain enough evidence, say what information is missing.
+- Be practical and student-friendly. Avoid generic motivational filler.
+
+Student profile: {json.dumps(request.profile)}
+Skills: {json.dumps(compact_skills)}
+Certificates: {json.dumps(compact_certs)}
+Ongoing courses: {json.dumps(compact_courses)}
+Career matches: {json.dumps(compact_careers)}
+Question: {request.question}
+
+Return ONLY JSON:
+{{
+  "answer": "",
+  "profile_evidence_used": [""],
+  "recommended_actions": [""],
+  "missing_information": [""],
+  "caution": ""
+}}
+"""
+
+    response = await resilient_llm_generate(prompt, max_tokens_override=1400)
+    payload = json.loads(response)
+    return {"status": "success", "advisor": payload}
+
+
 def _remove_post_route(path: str):
     main_module.app.router.routes = [
         route
@@ -336,6 +424,7 @@ def _remove_post_route(path: str):
 
 _remove_post_route("/api/verify-certificate")
 _remove_post_route("/api/generate-career-advice")
+_remove_post_route("/api/career-advisor")
 
 main_module.app.add_api_route(
     "/api/verify-certificate",
@@ -352,6 +441,12 @@ main_module.app.add_api_route(
 main_module.app.add_api_route(
     "/api/generate-career-advice",
     generate_career_advice_v2,
+    methods=["POST"],
+    tags=["career"],
+)
+main_module.app.add_api_route(
+    "/api/career-advisor",
+    career_advisor,
     methods=["POST"],
     tags=["career"],
 )
