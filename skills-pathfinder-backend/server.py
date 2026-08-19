@@ -9,6 +9,7 @@ BLS/O*NET market intelligence.
 import json
 import os
 import re
+from datetime import datetime
 from typing import Any, Dict, List
 
 from fastapi import File, HTTPException, Query, UploadFile
@@ -51,6 +52,47 @@ def _extract_json_text(raw_text: str) -> str:
         parsed = json.loads(candidate)
         return json.dumps(parsed)
     raise ValueError("Model response did not contain a valid JSON object")
+
+
+def _normalize_certificate_date(value: Any) -> str:
+    """Return PostgreSQL-safe YYYY-MM-DD dates or an empty string.
+
+    Certificate providers commonly print dates like ``Jan. 4, 2024`` or
+    ``January 4 2024``. Supabase date columns accept ISO dates, so normalize
+    provider/LLM text at the API boundary rather than letting one certificate
+    break an otherwise successful multi-file upload.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            return ""
+
+    compact = re.sub(r"(?<=\b[A-Za-z]{3})\.", "", text)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    formats = (
+        "%b %d, %Y",
+        "%B %d, %Y",
+        "%b %d %Y",
+        "%B %d %Y",
+        "%m/%d/%Y",
+        "%m-%d-%Y",
+        "%Y/%m/%d",
+        "%d %b %Y",
+        "%d %B %Y",
+    )
+    for fmt in formats:
+        try:
+            return datetime.strptime(compact, fmt).date().isoformat()
+        except ValueError:
+            continue
+
+    # If a provider only prints month/year, avoid inventing a day. Keep the
+    # database date null while the raw extraction preserves the original text.
+    return ""
 
 
 async def resilient_llm_generate(prompt: str, max_tokens_override: int = None):
@@ -124,11 +166,13 @@ Return ONLY JSON in this exact structure:
   "holder_name": "",
   "credential_id": "",
   "verification_url": "",
-  "issue_date": "",
-  "expiration_date": "",
+  "issue_date": "YYYY-MM-DD or empty",
+  "expiration_date": "YYYY-MM-DD or empty",
   "skills": [{{"name": "", "category": "", "confidence": 0.0}}]
 }}
 
+Dates must use ISO YYYY-MM-DD when a complete date is present. If the document
+only gives a month/year or the date is ambiguous, return an empty string.
 For skills, extract every meaningful skill, tool, methodology, domain competency,
 technology, or professional capability explicitly represented by the certificate.
 Do not restrict the skills to technology or engineering fields.
@@ -162,8 +206,10 @@ CERTIFICATE TEXT:
         "holder_name": data.get("holder_name") or "",
         "credential_id": data.get("credential_id") or "",
         "verification_url": data.get("verification_url") or "",
-        "issue_date": data.get("issue_date") or "",
-        "expiration_date": data.get("expiration_date") or "",
+        "issue_date": _normalize_certificate_date(data.get("issue_date")),
+        "expiration_date": _normalize_certificate_date(data.get("expiration_date")),
+        "raw_issue_date": data.get("issue_date") or "",
+        "raw_expiration_date": data.get("expiration_date") or "",
         "extracted_skills": certificate_skills,
         "skills_count": len(certificate_skills),
         "verification_status": verification["verification_status"],
