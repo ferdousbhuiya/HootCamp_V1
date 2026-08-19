@@ -28,14 +28,26 @@ Student signup/profile → resume and certificate collection → optional certif
 - Certificate processing now extracts certificate name, provider, holder, credential ID, verification URL, dates, and certificate-derived skills.
 - Electronic verification is conservative: a trusted-domain URL alone is NOT enough. The provider page must be reached and contain matching credential evidence before `electronically_verified` is returned.
 - Added distinct certificate statuses for no link, unknown provider/manual review, invalid link, unavailable verification page, provider page reached but unconfirmed, and electronically verified.
-- Onboarding now accepts multiple certificates, displays verification classifications, merges certificate skills with resume skills, and preserves verification state in Supabase.
-- Added certificate verification unit tests.
+- LinkedIn, Udemy, Coursera, Credly and other major credential hosts are supported by the trusted-host classifier. They remain unverified until evidence is actually found.
+- Dashboard certificate management now uses the same backend verification rules; opening a link or recognizing a provider domain can no longer self-mark a certificate verified.
+- Added `/api/verify-certificate-link` for safe re-verification of saved/manual certificate links.
+- Onboarding and dashboard accept multiple certificate formats; certificate findings and certificate-derived skills are saved with provenance and verification state.
+- Resume uploads now persist both `resume_analyses` and the long-term `skill_tracking` inventory, with evidence/confidence updates and career-recommendation snapshots.
+- Added `supabase/20260819_persistence.sql` for rich certificate evidence, skill provenance, career recommendation history, learning plans and career report history.
+- Added distinct `certificate_extracted` skill provenance so an unverified certificate skill is never mislabeled as certificate-verified.
+- Ongoing courses remain manually editable and support add/update/cancel/delete flows.
+- Onboarding now separates Close/Cancel from Finish. Closing no longer marks onboarding complete. Back/Next retains in-memory changes until the student explicitly finishes and saves.
+- Added retry-safety schema keys for onboarding records to support idempotent persistence work.
+- Career advice now targets the requested 30-day, 6-month and 1-year plan instead of the old 30/60/90-day-only structure.
+- Career reports now use skills, certificates, ongoing courses and saved career matches, and persist both the final report and the learning-plan snapshot in Supabase.
+- Added certificate verification tests for LinkedIn, Udemy and Coursera. These hosts are accepted for electronic checking but never pre-verified.
 - Added a broad multi-field career fallback catalog covering healthcare/nursing, clinical research, public health, biology, environmental science, business, finance/accounting, HR, marketing, administration, operations, supply chain, education, history/humanities, software, cybersecurity, cloud, data/AI, networking, databases, engineering, and project management.
 - Regulated careers such as Registered Nurse and Teacher are explicitly flagged and include licensure/education pathway requirements.
+- Latest CI after the persistence/flow changes: frontend production build passed; backend compile and unit tests passed.
 
 ## Next work
-- Harmonize the UserDashboard certificate-management flow with the new automatic verification endpoint so no UI can self-mark a certificate verified from a URL alone.
+- Finish idempotent onboarding upserts using the new client-record keys so a retry after a partial network failure cannot duplicate records.
 - Add current salary/job-market lookup from authoritative sources instead of stale hard-coded market figures.
-- Synchronize resume/certificate/course-derived skills more deeply into the unified Supabase skill profile and deduplicate across repeated sessions.
-- Build learning-path recommendations and 30-day/6-month/1-year reporting.
-- Expand final profile-aware AI career advisor.
+- Improve course-to-skill extraction/alignment beyond simple course-name comparison.
+- Add saved report/learning-plan history views in the dashboard.
+- Expand the profile-aware AI career advisor.
