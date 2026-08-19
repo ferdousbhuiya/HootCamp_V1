@@ -311,33 +311,61 @@ function App() {
   }
 
   if (loading) {
-    return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="animate-spin rounded-full h-14 w-14 border-4 border-indigo-100 border-t-indigo-600" /></div>;
+    return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="animate-spin rounded-full h-14 w-14 border-4 border-teal-100 border-t-teal-600" /></div>;
   }
 
   if (!user) return <Auth onAuthSuccess={handleAuthSuccess} />;
 
+  const currentWorkspace = showRecommendations ? 'Career Intelligence' : results ? 'Skill Analysis' : 'Resume Analysis';
+
   return (
-    <>
-      <div className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center gap-2 overflow-x-auto px-4 py-3">
-          <div className="mr-3 hidden shrink-0 items-center gap-2 md:flex">
-            <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-indigo-600 to-cyan-500 text-sm font-bold text-white">SP</div>
-            <span className="font-bold text-slate-900">Student Workspace</span>
+    <div className="authenticated-shell">
+      <div className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950 text-white shadow-xl shadow-slate-950/10">
+        <div className="mx-auto max-w-7xl px-4 py-3 sm:px-6">
+          <div className="flex items-center gap-4">
+            <div className="flex shrink-0 items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-teal-500 text-sm font-black tracking-tight text-slate-950 shadow-lg shadow-teal-950/20">SP</div>
+              <div className="hidden sm:block">
+                <p className="text-sm font-bold tracking-tight">Skills Pathfinder</p>
+                <p className="text-[11px] text-slate-400">Student career workspace</p>
+              </div>
+            </div>
+
+            <nav className="ml-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-xl bg-white/5 p-1" aria-label="Primary workspace navigation">
+              <button
+                onClick={startNewAnalysis}
+                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${!results ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+              >
+                Resume Analysis
+              </button>
+              <button
+                onClick={openLatestCareerIntelligence}
+                disabled={openingCareerIntelligence}
+                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-60 ${showRecommendations ? 'bg-teal-400 text-slate-950 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+              >
+                {openingCareerIntelligence ? 'Opening…' : 'Career Intelligence'}
+              </button>
+            </nav>
+
+            <div className="hidden shrink-0 items-center gap-2 lg:flex">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" />
+              <span className="text-xs text-slate-300">Saved workspace</span>
+            </div>
           </div>
-          <button
-            onClick={startNewAnalysis}
-            className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition ${!results ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-          >
-            Resume Analysis
-          </button>
-          <button
-            onClick={openLatestCareerIntelligence}
-            disabled={openingCareerIntelligence}
-            className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-60 ${showRecommendations ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700'}`}
-          >
-            {openingCareerIntelligence ? 'Opening…' : 'Career Intelligence'}
-          </button>
-          <div className="ml-auto hidden shrink-0 text-xs text-slate-400 lg:block">Career paths · skill gaps · salary & market · learning roadmap</div>
+        </div>
+      </div>
+
+      <div className="border-b border-slate-200 bg-white/80 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4 sm:px-6 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-teal-700">Current workspace</p>
+            <h1 className="mt-1 text-xl font-bold tracking-tight text-slate-900">{currentWorkspace}</h1>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium text-slate-600">Profile {hasCompletedOnboarding ? 'ready' : 'needs review'}</span>
+            <span className="rounded-full border border-teal-200 bg-teal-50 px-3 py-1.5 font-medium text-teal-800">Evidence saved to Supabase</span>
+            {results?.extracted_skills?.length > 0 && <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 font-medium text-sky-800">{results.extracted_skills.length} skills in current analysis</span>}
+          </div>
         </div>
       </div>
 
@@ -363,7 +391,7 @@ function App() {
           setError(null);
         }}
       >
-        {error && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{error}</div>}
+        {error && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">{error}</div>}
         {!results ? (
           <UploadComponent onUploadSuccess={handleUploadSuccess} onUploadError={handleUploadError} isLoading={isLoading} setIsLoading={setIsLoading} />
         ) : showRecommendations ? (
@@ -374,7 +402,7 @@ function App() {
       </UserDashboard>
       <SavedCareerHistory user={user} />
       <CareerAdvisor user={user} />
-    </>
+    </div>
   );
 }
 
