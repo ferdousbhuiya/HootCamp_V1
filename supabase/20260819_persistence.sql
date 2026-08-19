@@ -92,8 +92,9 @@ CREATE TABLE IF NOT EXISTS public.career_reports (
 );
 
 -- Generic durable findings store for current/future derived information that
--- should never exist only in browser state: skill-gap snapshots, course
--- alignment, job-market examples, salary lookups, advisor outputs, etc.
+-- should never exist only in browser state: onboarding drafts, skill-gap
+-- snapshots, course alignment, job-market examples, salary lookups, advisor
+-- outputs, etc.
 CREATE TABLE IF NOT EXISTS public.career_findings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
@@ -118,8 +119,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_resume_client_record ON public.resume_analy
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cert_client_record ON public.saved_certifications(user_id, client_record_key);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_course_client_record ON public.ongoing_courses(user_id, client_record_key);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_career_rec_client_record ON public.career_recommendations(user_id, client_record_key);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_career_findings_client_record ON public.career_findings(user_id, client_record_key)
-  WHERE client_record_key IS NOT NULL;
+
+-- A non-partial unique index is intentional here. PostgreSQL still permits
+-- multiple NULL client_record_key values, while Supabase/PostgREST can infer
+-- this index for ON CONFLICT (user_id, client_record_key) upserts.
+DROP INDEX IF EXISTS public.uq_career_findings_client_record;
+CREATE UNIQUE INDEX uq_career_findings_client_record ON public.career_findings(user_id, client_record_key);
 
 ALTER TABLE public.career_recommendations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.learning_plans ENABLE ROW LEVEL SECURITY;
