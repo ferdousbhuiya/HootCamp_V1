@@ -3,6 +3,10 @@
 -- This migration preserves every important derived result so it can be
 -- retrieved later for dashboards, reports, career advice, and auditing.
 
+-- 0) Expand skill provenance so extracted-but-unverified certificate skills
+-- are not mislabeled as self-reported or certificate-verified.
+ALTER TYPE public.skill_source ADD VALUE IF NOT EXISTS 'certificate_extracted';
+
 -- 1) Rich certificate evidence and extracted-skill persistence.
 ALTER TABLE public.saved_certifications
   ADD COLUMN IF NOT EXISTS holder_name text,
