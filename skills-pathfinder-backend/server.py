@@ -11,6 +11,7 @@ import os
 import re
 
 from fastapi import File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 import main as main_module
 import recommendation_engine as recommendation_module
@@ -23,7 +24,6 @@ from certificate_verification import (
 from recommendation_engine import get_career_recommendations, get_skill_gap_analysis
 
 
-# Expand the original proof-of-concept career list without creating duplicates.
 _existing_career_ids = {career.get("id") for career in recommendation_module.CAREER_PATHS}
 recommendation_module.CAREER_PATHS.extend(
     career for career in EXTENDED_CAREER_PATHS if career.get("id") not in _existing_career_ids
@@ -211,6 +211,34 @@ CERTIFICATE TEXT:
     }
 
 
+class CertificateLinkRequest(BaseModel):
+    certification_name: str = ""
+    provider: str = ""
+    holder_name: str = ""
+    credential_id: str = ""
+    verification_url: str = ""
+
+
+async def verify_certificate_link(request: CertificateLinkRequest):
+    """Re-check a saved or manually entered certificate verification URL.
+
+    This never marks a credential verified merely because the URL is from a
+    recognized provider. The provider page must contain matching evidence.
+    """
+    certificate = request.model_dump()
+    result = verify_certificate_url(certificate)
+    return {
+        **certificate,
+        "verification_status": result["verification_status"],
+        "verification_method": result.get("verification_method"),
+        "verification_message": result.get("verification_message"),
+        "verification_evidence": result.get("verification_evidence", []),
+        "verified_url": result.get("verified_url"),
+        "is_verified": bool(result.get("is_verified")),
+        "auto_verified": bool(result.get("is_verified")),
+    }
+
+
 main_module.app.router.routes = [
     route
     for route in main_module.app.router.routes
@@ -222,6 +250,12 @@ main_module.app.router.routes = [
 main_module.app.add_api_route(
     "/api/verify-certificate",
     verify_certificate_v2,
+    methods=["POST"],
+    tags=["certificates"],
+)
+main_module.app.add_api_route(
+    "/api/verify-certificate-link",
+    verify_certificate_link,
     methods=["POST"],
     tags=["certificates"],
 )
