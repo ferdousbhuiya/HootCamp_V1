@@ -45,7 +45,7 @@ jobs:
           required = {
               '/', '/health', '/api/upload', '/api/recommendations',
               '/api/verify-certificate', '/api/verify-certificate-link',
-              '/api/generate-career-advice'
+              '/api/generate-career-advice', '/api/career-advisor'
           }
           missing = required - paths
           assert not missing, f'Missing API routes: {sorted(missing)}'
