@@ -18,6 +18,7 @@ ALTER TABLE public.saved_certifications
   ADD COLUMN IF NOT EXISTS verification_evidence jsonb DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS verified_url text,
   ADD COLUMN IF NOT EXISTS raw_extraction jsonb DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS client_record_key text,
   ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
 -- 2) Skill provenance and evidence.
@@ -26,6 +27,10 @@ ALTER TABLE public.skill_tracking
   ADD COLUMN IF NOT EXISTS evidence text,
   ADD COLUMN IF NOT EXISTS source_record_id uuid,
   ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
+
+-- 2b) Idempotency keys for retry-safe onboarding writes.
+ALTER TABLE public.resume_analyses ADD COLUMN IF NOT EXISTS client_record_key text;
+ALTER TABLE public.ongoing_courses ADD COLUMN IF NOT EXISTS client_record_key text;
 
 -- 3) Persist career recommendation snapshots independent of a resume upload.
 CREATE TABLE IF NOT EXISTS public.career_recommendations (
@@ -42,6 +47,7 @@ CREATE TABLE IF NOT EXISTS public.career_recommendations (
   missing_skills jsonb DEFAULT '[]'::jsonb,
   recommendation_data jsonb NOT NULL DEFAULT '{}'::jsonb,
   market_data jsonb DEFAULT '{}'::jsonb,
+  client_record_key text,
   created_at timestamptz DEFAULT now()
 );
 
@@ -81,6 +87,10 @@ CREATE TABLE IF NOT EXISTS public.career_reports (
 CREATE INDEX IF NOT EXISTS idx_career_recommendations_user_id ON public.career_recommendations(user_id);
 CREATE INDEX IF NOT EXISTS idx_learning_plans_user_id ON public.learning_plans(user_id);
 CREATE INDEX IF NOT EXISTS idx_career_reports_user_id ON public.career_reports(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_resume_client_record ON public.resume_analyses(user_id, client_record_key) WHERE client_record_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cert_client_record ON public.saved_certifications(user_id, client_record_key) WHERE client_record_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_course_client_record ON public.ongoing_courses(user_id, client_record_key) WHERE client_record_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_career_rec_client_record ON public.career_recommendations(user_id, client_record_key) WHERE client_record_key IS NOT NULL;
 
 ALTER TABLE public.career_recommendations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.learning_plans ENABLE ROW LEVEL SECURITY;
