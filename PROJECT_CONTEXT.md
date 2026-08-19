@@ -18,4 +18,16 @@ Student signup/profile → resume and certificate collection → optional certif
 ## 2026-08-19
 - GitHub read/write access verified.
 - Repository-first workflow started so source files do not need to be pasted into chat.
-- Current stabilization work: recommendation engine, backend integration, React recommendation UI, persistence/error handling.
+- React stabilization added on branch `agent/skills-pathfinder-stabilize`: best-career summary, comparison, gap roadmap, course alignment, safer null handling, same-origin API fallback, and stronger Supabase error handling.
+- Backend career matching rewritten to remove arbitrary substring matching, add explicit aliases, confidence-aware scoring, match/gap percentages, matched evidence details, and explainable `match_reason` output.
+- Added `server.py` production bootstrap to wire recommendation functions into the existing FastAPI app and provide resilient Groq JSON parsing for `openai/gpt-oss-20b`.
+- Backend Dockerfile now starts `server:app`.
+- Added backend recommendation unit tests.
+- Added GitHub Actions CI for backend compile/tests and frontend production build.
+- Backend CI passed.
+- Frontend dependency install and production build passed.
+
+## Next work
+- Expand the career intelligence layer beyond the initial eight careers.
+- Synchronize resume/certificate/course-derived skills into the unified Supabase skill profile.
+- Build learning-path and 30-day/6-month/1-year reporting.
