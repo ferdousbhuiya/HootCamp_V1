@@ -27,6 +27,7 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [openingCareerIntelligence, setOpeningCareerIntelligence] = useState(false);
+  const [workspaceNavigationKey, setWorkspaceNavigationKey] = useState(0);
 
   const readOnboardingState = async (userId) => {
     const { data: profile, error: profileError } = await supabase
@@ -275,6 +276,7 @@ function App() {
       if (!latest) {
         setResults(null);
         setShowRecommendations(false);
+        setWorkspaceNavigationKey((current) => current + 1);
         setError('Upload and analyze a resume first. Career Intelligence will appear here as soon as a saved analysis is available.');
         return;
       }
@@ -286,6 +288,7 @@ function App() {
         recommendations: latest.recommendations || []
       });
       setShowRecommendations(true);
+      setWorkspaceNavigationKey((current) => current + 1);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (careerError) {
       console.error('Could not open Career Intelligence:', careerError);
@@ -299,6 +302,7 @@ function App() {
     setResults(null);
     setShowRecommendations(false);
     setError(null);
+    setWorkspaceNavigationKey((current) => current + 1);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -338,6 +342,7 @@ function App() {
       </div>
 
       <UserDashboard
+        key={workspaceNavigationKey}
         user={user}
         onboardingComplete={hasCompletedOnboarding}
         onLogout={handleLogout}
