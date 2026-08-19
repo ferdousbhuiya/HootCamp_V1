@@ -24,6 +24,17 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
 
+  const readOnboardingState = async (userId) => {
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('has_completed_onboarding')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profileError) throw profileError;
+    return Boolean(profile?.has_completed_onboarding);
+  };
+
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
@@ -31,13 +42,13 @@ function App() {
       setUser(session?.user || null);
 
       if (session?.user) {
-        const { data: profile, error: profileError } = await supabase
-          .from('profiles')
-          .select('has_completed_onboarding')
-          .eq('id', session.user.id)
-          .maybeSingle();
-        if (profileError) console.error('Profile onboarding check failed:', profileError);
-        setHasCompletedOnboarding(Boolean(profile?.has_completed_onboarding));
+        try {
+          const completed = await readOnboardingState(session.user.id);
+          setHasCompletedOnboarding(completed);
+        } catch (profileError) {
+          console.error('Profile onboarding check failed:', profileError);
+          setHasCompletedOnboarding(false);
+        }
       }
       setLoading(false);
     };
@@ -55,10 +66,26 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleAuthSuccess = (authenticatedUser, isNewUser = false) => {
+  const handleAuthSuccess = async (authenticatedUser, isNewUser = false) => {
     setUser(authenticatedUser);
-    setShowOnboarding(isNewUser);
-    setHasCompletedOnboarding(!isNewUser);
+    setError(null);
+
+    if (isNewUser) {
+      setHasCompletedOnboarding(false);
+      setShowOnboarding(true);
+      return;
+    }
+
+    try {
+      const completed = await readOnboardingState(authenticatedUser.id);
+      setHasCompletedOnboarding(completed);
+      setShowOnboarding(!completed);
+    } catch (profileError) {
+      console.error('Could not restore onboarding state after sign in:', profileError);
+      setHasCompletedOnboarding(false);
+      setShowOnboarding(false);
+      setError('Signed in successfully, but your onboarding status could not be loaded. You can reopen onboarding from your dashboard.');
+    }
   };
 
   const handleLogout = () => {
