@@ -74,12 +74,8 @@ jobs:
           VITE_API_URL: ''
         run: npm run build
       - name: Install Chromium for visual smoke test
-        run: npx --yes playwright@1.55.0 install --with-deps chromium
+        run: npx --yes playwright@1.55.0 install chromium
       - name: Start production preview
-        env:
-          VITE_SUPABASE_URL: https://example.supabase.co
-          VITE_SUPABASE_ANON_KEY: test-anon-key
-          VITE_API_URL: ''
         run: |
           nohup npm run preview -- --host 127.0.0.1 --port 4173 > /tmp/skills-pathfinder-preview.log 2>&1 &
           for i in {1..30}; do
