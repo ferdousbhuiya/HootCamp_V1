@@ -43,7 +43,7 @@ Student signup/profile → resume and certificate collection → optional certif
 - Added certificate verification tests for LinkedIn, Udemy and Coursera. These hosts are accepted for electronic checking but never pre-verified.
 - Added a broad multi-field career fallback catalog covering healthcare/nursing, clinical research, public health, biology, environmental science, business, finance/accounting, HR, marketing, administration, operations, supply chain, education, history/humanities, software, cybersecurity, cloud, data/AI, networking, databases, engineering, and project management.
 - Regulated careers such as Registered Nurse and Teacher are explicitly flagged and include licensure/education pathway requirements.
-- Latest backend compile/unit tests passed after the persistence and flow changes. Frontend production build is also covered by CI.
+- Latest GitHub Actions run for branch head `cb5caa95` completed successfully. Backend compile/unit tests and frontend production build are green.
 
 ## Deployment note before merge
 The new frontend persistence code depends on the schema additions in `supabase/20260819_persistence.sql`. Apply that migration to the live Supabase project before merging/deploying this branch, otherwise the new columns/tables will not exist.
