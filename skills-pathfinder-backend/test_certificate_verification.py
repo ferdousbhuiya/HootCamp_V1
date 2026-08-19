@@ -22,6 +22,18 @@ class CertificateVerificationTests(unittest.TestCase):
         self.assertEqual(result["verification_status"], "verification_pending")
         self.assertFalse(result["is_verified"])
 
+    def test_learning_platform_hosts_are_supported_but_not_preverified(self):
+        urls = [
+            "https://www.linkedin.com/learning/certificates/example",
+            "https://www.udemy.com/certificate/example/",
+            "https://www.coursera.org/account/accomplishments/certificate/example",
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                result = classify_verification_url(url)
+                self.assertEqual(result["verification_status"], "verification_pending")
+                self.assertFalse(result["is_verified"])
+
     def test_insecure_url_is_rejected(self):
         result = classify_verification_url("http://www.credly.com/badges/example")
         self.assertEqual(result["verification_status"], "verification_link_invalid")
