@@ -1,12 +1,9 @@
 """Production bootstrap for Skills Pathfinder.
 
-This module extends the original FastAPI application with:
-- resilient Groq JSON handling;
-- the expanded career catalog;
-- conservative certificate verification;
-- safe verification-link rechecks;
-- structured career-development plans; and
-- a profile-aware student career advisor.
+This module extends the original FastAPI application with resilient Groq JSON
+handling, broad career coverage, conservative certificate verification,
+structured career planning, a profile-aware AI advisor, and failure-tolerant
+BLS/O*NET market intelligence.
 """
 
 import json
@@ -14,7 +11,7 @@ import os
 import re
 from typing import Any, Dict, List
 
-from fastapi import File, HTTPException, UploadFile
+from fastapi import File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 import main as main_module
@@ -25,6 +22,7 @@ from certificate_verification import (
     normalize_certificate_skills,
     verify_certificate_url,
 )
+from market_intelligence import get_market_intelligence
 from recommendation_engine import get_career_recommendations, get_skill_gap_analysis
 
 
@@ -32,7 +30,6 @@ _existing_career_ids = {career.get("id") for career in recommendation_module.CAR
 recommendation_module.CAREER_PATHS.extend(
     career for career in EXTENDED_CAREER_PATHS if career.get("id") not in _existing_career_ids
 )
-
 main_module.get_career_recommendations = get_career_recommendations
 main_module.get_skill_gap_analysis = get_skill_gap_analysis
 
@@ -42,44 +39,30 @@ def _extract_json_text(raw_text: str) -> str:
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s*```$", "", text)
-
     try:
         parsed = json.loads(text)
         return json.dumps(parsed)
     except json.JSONDecodeError:
         pass
-
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
         candidate = text[start : end + 1]
         parsed = json.loads(candidate)
         return json.dumps(parsed)
-
     raise ValueError("Model response did not contain a valid JSON object")
 
 
 async def resilient_llm_generate(prompt: str, max_tokens_override: int = None):
     if not main_module.groq_client:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured.")
-
     max_tokens = max_tokens_override or main_module.AI_MAX_OUTPUT_TOKENS
-
     try:
-        print(
-            f"[LLM] Calling Groq API model={main_module.GROQ_MODEL}, "
-            f"max_tokens={max_tokens}, resilient_json=true"
-        )
+        print(f"[LLM] Calling Groq API model={main_module.GROQ_MODEL}, max_tokens={max_tokens}, resilient_json=true")
         completion = main_module.groq_client.chat.completions.create(
             model=main_module.GROQ_MODEL,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Return exactly one valid JSON object. Do not use markdown, "
-                        "code fences, commentary, or text outside the JSON object."
-                    ),
-                },
+                {"role": "system", "content": "Return exactly one valid JSON object. Do not use markdown, code fences, commentary, or text outside the JSON object."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
@@ -89,17 +72,13 @@ async def resilient_llm_generate(prompt: str, max_tokens_override: int = None):
         normalized = _extract_json_text(raw)
         print(f"[LLM] Valid JSON response length: {len(normalized)} characters")
         return normalized
-
     except HTTPException:
         raise
     except Exception as exc:
         error_text = str(exc)
         print(f"[LLM] Groq API Error: {error_text}")
         if "413" in error_text or "tokens per minute" in error_text.lower():
-            raise HTTPException(
-                status_code=429,
-                detail="Groq free-tier token limit reached. Please retry with a smaller document or after the limit resets.",
-            )
+            raise HTTPException(status_code=429, detail="Groq free-tier token limit reached. Please retry with a smaller document or after the limit resets.")
         if "rate_limit" in error_text.lower() or "429" in error_text:
             raise HTTPException(status_code=429, detail="Groq rate limit reached. Please try again shortly.")
         raise HTTPException(status_code=502, detail=f"Groq AI processing failed: {error_text}")
@@ -111,19 +90,13 @@ main_module.llm_generate = resilient_llm_generate
 async def _extract_certificate_document(file: UploadFile):
     filename = file.filename or "certificate"
     extension = os.path.splitext(filename)[1].lower()
-
     if extension not in SUPPORTED_CERTIFICATE_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported certificate file. Use PDF, DOCX, TXT, PNG, JPG or JPEG.",
-        )
-
+        raise HTTPException(status_code=400, detail="Unsupported certificate file. Use PDF, DOCX, TXT, PNG, JPG or JPEG.")
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Certificate file is empty.")
     if len(file_bytes) > main_module.MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="Certificate file exceeds the 15MB limit.")
-
     if extension == ".pdf":
         text = main_module.extract_text_from_pdf(file_bytes)
     elif extension == ".docx":
@@ -132,17 +105,14 @@ async def _extract_certificate_document(file: UploadFile):
         text = main_module.extract_text_from_txt(file_bytes)
     else:
         text = main_module.extract_text_from_image(file_bytes)
-
     text = main_module.clean_extracted_text(text)
     if len(text.strip()) < 10:
         raise HTTPException(status_code=400, detail="Could not extract meaningful certificate text.")
-
     return filename, extension, text
 
 
 async def verify_certificate_v2(file: UploadFile = File(...)):
     filename, extension, text = await _extract_certificate_document(file)
-
     prompt = f"""
 Analyze this certificate or completed-course credential.
 Do not invent information. Extract only evidence supported by the document.
@@ -156,9 +126,7 @@ Return ONLY JSON in this exact structure:
   "verification_url": "",
   "issue_date": "",
   "expiration_date": "",
-  "skills": [
-    {{"name": "", "category": "", "confidence": 0.0}}
-  ]
+  "skills": [{{"name": "", "category": "", "confidence": 0.0}}]
 }}
 
 For skills, extract every meaningful skill, tool, methodology, domain competency,
@@ -168,7 +136,6 @@ Do not restrict the skills to technology or engineering fields.
 CERTIFICATE TEXT:
 {text}
 """
-
     try:
         response = await resilient_llm_generate(prompt, max_tokens_override=1400)
         data = json.loads(response)
@@ -177,20 +144,16 @@ CERTIFICATE TEXT:
     except Exception as exc:
         print(f"[CERTIFICATE] AI metadata extraction failed: {exc}")
         data = {}
-
     if not data.get("certification_name"):
         data["certification_name"] = os.path.splitext(filename)[0]
     if not data.get("provider"):
         data["provider"] = "Unknown"
-
     certificate_skills = normalize_certificate_skills(data.get("skills"))
     if not certificate_skills:
         certificate_skills = main_module.deduplicate_skills(main_module.local_skill_fallback(text))
         for skill in certificate_skills:
             skill["source"] = "certificate"
-
     verification = verify_certificate_url(data)
-
     return {
         "filename": filename,
         "file_type": extension,
@@ -245,34 +208,9 @@ class CareerAdviceRequest(BaseModel):
 
 
 async def generate_career_advice_v2(request: CareerAdviceRequest):
-    """Generate a practical 30-day, 6-month and 1-year student plan."""
-    compact_certs = [
-        {
-            "name": item.get("certification_name"),
-            "provider": item.get("provider"),
-            "verified": item.get("is_verified"),
-            "status": item.get("verification_status"),
-        }
-        for item in request.certifications[:20]
-    ]
-    compact_courses = [
-        {
-            "name": item.get("course_name"),
-            "provider": item.get("provider"),
-            "status": item.get("status"),
-            "completion": item.get("expected_completion_date"),
-        }
-        for item in request.courses[:20]
-    ]
-    compact_careers = [
-        {
-            "title": item.get("path") or item.get("career_title"),
-            "match": item.get("match_percentage") or item.get("match_score"),
-            "missing_skills": item.get("missing_skills", []),
-        }
-        for item in request.career_recommendations[:5]
-    ]
-
+    compact_certs = [{"name": i.get("certification_name"), "provider": i.get("provider"), "verified": i.get("is_verified"), "status": i.get("verification_status")} for i in request.certifications[:20]]
+    compact_courses = [{"name": i.get("course_name"), "provider": i.get("provider"), "status": i.get("status"), "completion": i.get("expected_completion_date")} for i in request.courses[:20]]
+    compact_careers = [{"title": i.get("path") or i.get("career_title"), "match": i.get("match_percentage") or i.get("match_score"), "missing_skills": i.get("missing_skills", [])} for i in request.career_recommendations[:5]]
     prompt = f"""
 Create a student career-development report from the structured profile below.
 Do not assume licenses, degrees, or certifications that are not present.
@@ -287,39 +225,17 @@ Career matches: {json.dumps(compact_careers)}
 Return ONLY JSON:
 {{
   "executive_summary": "",
-  "swot_analysis": {{
-    "strengths": [],
-    "weaknesses": [],
-    "opportunities": [],
-    "threats": []
-  }},
-  "career_readiness": {{
-    "current_level": "",
-    "strongest_path": "",
-    "alternative_paths": [],
-    "major_constraints": []
-  }},
-  "action_plan": {{
-    "30_days": [""],
-    "6_months": [""],
-    "1_year": [""]
-  }},
+  "swot_analysis": {{"strengths": [], "weaknesses": [], "opportunities": [], "threats": []}},
+  "career_readiness": {{"current_level": "", "strongest_path": "", "alternative_paths": [], "major_constraints": []}},
+  "action_plan": {{"30_days": [""], "6_months": [""], "1_year": [""]}},
   "recommended_next_skills": [],
   "recommended_certifications": [],
   "recommended_projects": [],
-  "ongoing_course_alignment": [
-    {{"course": "", "career_or_skill": "", "alignment": ""}}
-  ],
-  "application_readiness": {{
-    "can_apply_now": [],
-    "prepare_before_applying": [],
-    "regulated_roles_note": ""
-  }}
+  "ongoing_course_alignment": [{{"course": "", "career_or_skill": "", "alignment": ""}}],
+  "application_readiness": {{"can_apply_now": [], "prepare_before_applying": [], "regulated_roles_note": ""}}
 }}
-
 Be practical, specific, and concise.
 """
-
     response = await resilient_llm_generate(prompt, max_tokens_override=2200)
     return {"status": "success", "advice": json.loads(response)}
 
@@ -334,53 +250,12 @@ class CareerAdvisorRequest(BaseModel):
 
 
 async def career_advisor(request: CareerAdvisorRequest):
-    """Answer a student's career question using only the supplied structured profile."""
-    compact_skills = [
-        {
-            "name": item.get("skill_name") or item.get("name"),
-            "category": item.get("category"),
-            "proficiency": item.get("proficiency_level"),
-            "status": item.get("status"),
-            "source": item.get("source"),
-            "verification": item.get("verification_status"),
-            "confidence": item.get("confidence"),
-        }
-        for item in request.skills[:120]
-        if item.get("skill_name") or item.get("name")
-    ]
-    compact_certs = [
-        {
-            "name": item.get("certification_name"),
-            "provider": item.get("provider"),
-            "verified": bool(item.get("is_verified")),
-            "verification_status": item.get("verification_status"),
-            "status": item.get("status"),
-        }
-        for item in request.certifications[:30]
-    ]
-    compact_courses = [
-        {
-            "name": item.get("course_name"),
-            "provider": item.get("provider"),
-            "status": item.get("status"),
-            "expected_completion_date": item.get("expected_completion_date"),
-        }
-        for item in request.courses[:30]
-    ]
-    compact_careers = [
-        {
-            "title": item.get("career_title") or item.get("path"),
-            "match_percentage": item.get("match_percentage"),
-            "matched_skills": item.get("matched_skills", []),
-            "missing_skills": item.get("missing_skills", []),
-            "regulated": (item.get("recommendation_data") or {}).get("regulated"),
-        }
-        for item in request.career_recommendations[:8]
-    ]
-
+    compact_skills = [{"name": i.get("skill_name") or i.get("name"), "category": i.get("category"), "proficiency": i.get("proficiency_level"), "status": i.get("status"), "source": i.get("source"), "verification": i.get("verification_status"), "confidence": i.get("confidence")} for i in request.skills[:120] if i.get("skill_name") or i.get("name")]
+    compact_certs = [{"name": i.get("certification_name"), "provider": i.get("provider"), "verified": bool(i.get("is_verified")), "verification_status": i.get("verification_status"), "status": i.get("status")} for i in request.certifications[:30]]
+    compact_courses = [{"name": i.get("course_name"), "provider": i.get("provider"), "status": i.get("status"), "expected_completion_date": i.get("expected_completion_date")} for i in request.courses[:30]]
+    compact_careers = [{"title": i.get("career_title") or i.get("path"), "match_percentage": i.get("match_percentage"), "matched_skills": i.get("matched_skills", []), "missing_skills": i.get("missing_skills", []), "regulated": (i.get("recommendation_data") or {}).get("regulated_role")} for i in request.career_recommendations[:8]]
     prompt = f"""
 You are the Skills Pathfinder Career Advisor. Answer the student's question from the structured profile below.
-
 Rules:
 - Ground the answer in the supplied profile. Do not claim the student has a skill, degree, certificate, license, or experience that is not present.
 - Clearly distinguish verified certificate evidence, AI-extracted evidence, self-reported skills, and ongoing learning when relevant.
@@ -397,58 +272,32 @@ Career matches: {json.dumps(compact_careers)}
 Question: {request.question}
 
 Return ONLY JSON:
-{{
-  "answer": "",
-  "profile_evidence_used": [""],
-  "recommended_actions": [""],
-  "missing_information": [""],
-  "caution": ""
-}}
+{{"answer": "", "profile_evidence_used": [""], "recommended_actions": [""], "missing_information": [""], "caution": ""}}
 """
-
     response = await resilient_llm_generate(prompt, max_tokens_override=1400)
-    payload = json.loads(response)
-    return {"status": "success", "advisor": payload}
+    return {"status": "success", "advisor": json.loads(response)}
 
 
-def _remove_post_route(path: str):
+async def market_data(career_title: str = Query(..., min_length=2, max_length=180)):
+    return {"status": "success", "market_data": get_market_intelligence(career_title)}
+
+
+def _remove_route(path: str, method: str):
     main_module.app.router.routes = [
-        route
-        for route in main_module.app.router.routes
-        if not (
-            getattr(route, "path", None) == path
-            and "POST" in getattr(route, "methods", set())
-        )
+        route for route in main_module.app.router.routes
+        if not (getattr(route, "path", None) == path and method in getattr(route, "methods", set()))
     ]
 
 
-_remove_post_route("/api/verify-certificate")
-_remove_post_route("/api/generate-career-advice")
-_remove_post_route("/api/career-advisor")
+_remove_route("/api/verify-certificate", "POST")
+_remove_route("/api/generate-career-advice", "POST")
+_remove_route("/api/career-advisor", "POST")
+_remove_route("/api/market-data", "GET")
 
-main_module.app.add_api_route(
-    "/api/verify-certificate",
-    verify_certificate_v2,
-    methods=["POST"],
-    tags=["certificates"],
-)
-main_module.app.add_api_route(
-    "/api/verify-certificate-link",
-    verify_certificate_link,
-    methods=["POST"],
-    tags=["certificates"],
-)
-main_module.app.add_api_route(
-    "/api/generate-career-advice",
-    generate_career_advice_v2,
-    methods=["POST"],
-    tags=["career"],
-)
-main_module.app.add_api_route(
-    "/api/career-advisor",
-    career_advisor,
-    methods=["POST"],
-    tags=["career"],
-)
+main_module.app.add_api_route("/api/verify-certificate", verify_certificate_v2, methods=["POST"], tags=["certificates"])
+main_module.app.add_api_route("/api/verify-certificate-link", verify_certificate_link, methods=["POST"], tags=["certificates"])
+main_module.app.add_api_route("/api/generate-career-advice", generate_career_advice_v2, methods=["POST"], tags=["career"])
+main_module.app.add_api_route("/api/career-advisor", career_advisor, methods=["POST"], tags=["career"])
+main_module.app.add_api_route("/api/market-data", market_data, methods=["GET"], tags=["market"])
 
 app = main_module.app
