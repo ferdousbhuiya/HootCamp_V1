@@ -157,7 +157,7 @@ const Auth = ({ onAuthSuccess }) => {
         </div>
 
         <div className="relative mx-auto grid min-h-screen max-w-7xl lg:grid-cols-[1.08fr_0.92fr]">
-          <section className="flex flex-col justify-between px-6 py-8 text-white sm:px-10 lg:px-14 lg:py-12">
+          <section className="order-2 flex flex-col justify-between px-6 py-8 text-white sm:px-10 lg:order-1 lg:px-14 lg:py-12">
             <div className="hidden lg:block">
               <div className="inline-flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
                 <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-400 shadow-lg shadow-indigo-950/30">
@@ -203,7 +203,7 @@ const Auth = ({ onAuthSuccess }) => {
             </p>
           </section>
 
-          <section className="flex items-center justify-center bg-slate-50/95 px-4 py-8 sm:px-8 lg:bg-white lg:px-12">
+          <section className="order-1 flex items-center justify-center bg-slate-50/95 px-4 py-8 sm:px-8 lg:order-2 lg:bg-white lg:px-12">
             <div className="w-full max-w-lg">
               <div className="mb-7 lg:hidden">
                 <BrandMark />
