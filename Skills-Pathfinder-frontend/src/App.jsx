@@ -12,6 +12,8 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
+const normalizeName = (value = '') => value.trim().replace(/\s+/g, ' ').toLowerCase();
+
 function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -27,6 +29,7 @@ function App() {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) console.error('Session check failed:', sessionError);
       setUser(session?.user || null);
+
       if (session?.user) {
         const { data: profile, error: profileError } = await supabase
           .from('profiles')
@@ -67,6 +70,82 @@ function App() {
     setError(null);
   };
 
+  const syncResumeSkills = async (analysisId, data) => {
+    const incomingSkills = Array.isArray(data.extracted_skills) ? data.extracted_skills : [];
+    if (!incomingSkills.length) return;
+
+    const { data: existingSkills, error: existingError } = await supabase
+      .from('skill_tracking')
+      .select('id,skill_name,source,verification_status,confidence')
+      .eq('user_id', user.id);
+    if (existingError) throw existingError;
+
+    const explanationMap = new Map(
+      (data.explanations || []).map((item) => [normalizeName(item.skill), item])
+    );
+    const existingMap = new Map((existingSkills || []).map((item) => [normalizeName(item.skill_name), item]));
+
+    for (const skill of incomingSkills) {
+      if (!skill?.name) continue;
+      const key = normalizeName(skill.name);
+      const current = existingMap.get(key);
+      const explanation = explanationMap.get(key);
+      const confidence = Number.isFinite(Number(skill.confidence)) ? Number(skill.confidence) : 0.8;
+
+      if (current) {
+        const updates = {
+          category: skill.category || undefined,
+          confidence: Math.max(Number(current.confidence || 0), confidence),
+          evidence: explanation?.evidence || undefined,
+          metadata: {
+            latest_resume_analysis_id: analysisId,
+            latest_reasoning: explanation?.reasoning || null
+          },
+          updated_at: new Date().toISOString()
+        };
+        Object.keys(updates).forEach((field) => updates[field] === undefined && delete updates[field]);
+        const { error: updateError } = await supabase.from('skill_tracking').update(updates).eq('id', current.id);
+        if (updateError) throw updateError;
+      } else {
+        const { data: inserted, error: insertError } = await supabase.from('skill_tracking').insert({
+          user_id: user.id,
+          skill_name: skill.name.trim(),
+          category: skill.category || 'General',
+          proficiency_level: 'unknown',
+          status: 'existing',
+          source: 'resume_extracted',
+          verification_status: 'ai_verified',
+          confidence,
+          evidence: explanation?.evidence || null,
+          source_record_id: analysisId,
+          metadata: { reasoning: explanation?.reasoning || null }
+        }).select('id,skill_name,source,verification_status,confidence').single();
+        if (insertError) throw insertError;
+        existingMap.set(key, inserted);
+      }
+    }
+  };
+
+  const saveCareerRecommendationSnapshots = async (analysisId, recommendations = []) => {
+    if (!recommendations.length) return;
+    const rows = recommendations.map((rec) => ({
+      user_id: user.id,
+      source_analysis_id: analysisId,
+      career_id: rec.id,
+      career_title: rec.path,
+      category: rec.category,
+      match_score: rec.match_score,
+      match_percentage: rec.match_percentage ?? Math.round((rec.match_score || 0) * 100),
+      skill_gap_percentage: rec.skill_gap_percentage ?? null,
+      matched_skills: rec.matched_skills || [],
+      missing_skills: rec.missing_skills || [],
+      recommendation_data: rec,
+      market_data: {}
+    }));
+    const { error: recError } = await supabase.from('career_recommendations').insert(rows);
+    if (recError) throw recError;
+  };
+
   const handleUploadSuccess = async (data) => {
     setResults(data);
     setShowRecommendations(false);
@@ -74,19 +153,24 @@ function App() {
     setIsLoading(false);
 
     if (!user) return;
-    const { error: saveError } = await supabase.from('resume_analyses').insert({
-      user_id: user.id,
-      filename: data.filename,
-      character_count: data.character_count,
-      skills_count: data.extracted_skills?.length || 0,
-      extracted_skills: data.extracted_skills || [],
-      explanations: data.explanations || [],
-      recommendations: data.recommendations || []
-    });
 
-    if (saveError) {
-      console.error('Error saving analysis:', saveError);
-      setError('Your analysis completed, but it could not be saved to your account. Please retry before leaving this page.');
+    try {
+      const { data: savedAnalysis, error: saveError } = await supabase.from('resume_analyses').insert({
+        user_id: user.id,
+        filename: data.filename,
+        character_count: data.character_count,
+        skills_count: data.extracted_skills?.length || 0,
+        extracted_skills: data.extracted_skills || [],
+        explanations: data.explanations || [],
+        recommendations: data.recommendations || []
+      }).select('id').single();
+      if (saveError) throw saveError;
+
+      await syncResumeSkills(savedAnalysis.id, data);
+      await saveCareerRecommendationSnapshots(savedAnalysis.id, data.recommendations || []);
+    } catch (saveError) {
+      console.error('Error persisting analysis findings:', saveError);
+      setError('The analysis completed, but one or more findings could not be saved. Keep this page open and retry after checking the database migration.');
     }
   };
 
