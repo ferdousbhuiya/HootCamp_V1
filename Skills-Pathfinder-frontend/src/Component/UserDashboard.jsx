@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import CareerReport from './CareerReport';
 
@@ -6,6 +6,11 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
+
+const emptyCourse = { course_name: '', provider: '', expected_completion_date: '', status: 'in_progress' };
+const emptyCert = { certification_name: '', provider: '', holder_name: '', credential_id: '', verification_url: '', status: 'completed' };
+const normalizeName = (value = '') => value.trim().replace(/\s+/g, ' ').toLowerCase();
+const apiBase = () => (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, children }) => {
   const [profile, setProfile] = useState(null);
@@ -16,588 +21,517 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('history');
   const [showReport, setShowReport] = useState(false);
+  const [notice, setNotice] = useState(null);
 
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [formData, setFormData] = useState({});
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const [newSkill, setNewSkill] = useState({ skill_name: '', category: 'Tool/Software', proficiency_level: 'beginner', status: 'learning' });
+  const [newSkill, setNewSkill] = useState({ skill_name: '', category: 'Domain Knowledge', proficiency_level: 'beginner', status: 'existing' });
   const [skillFilter, setSkillFilter] = useState('all');
 
-  const [newCert, setNewCert] = useState({ certification_name: '', provider: '', credential_id: '', verification_url: '', status: 'recommended' });
-  const [certFile, setCertFile] = useState(null);
-  const [uploadingCert, setUploadingCert] = useState(false);
-  const [verifyingCert, setVerifyingCert] = useState(null);
+  const [courseForm, setCourseForm] = useState(emptyCourse);
+  const [editingCourseId, setEditingCourseId] = useState(null);
 
-  const [newCourse, setNewCourse] = useState({ course_name: '', provider: '', expected_completion_date: '' });
+  const [certFiles, setCertFiles] = useState([]);
+  const [uploadingCert, setUploadingCert] = useState(false);
+  const [manualCert, setManualCert] = useState(emptyCert);
+  const [savingManualCert, setSavingManualCert] = useState(false);
+  const [verifyingCert, setVerifyingCert] = useState(null);
 
   useEffect(() => {
     if (user) fetchUserData();
   }, [user]);
 
   useEffect(() => {
-    if (profile) {
-      setFormData({
-        full_name: profile.full_name || '',
-        phone: profile.phone || '',
-        address: profile.address || '',
-        city: profile.city || '',
-        state: profile.state || '',
-        zip_code: profile.zip_code || ''
-      });
-    }
+    if (profile) resetProfileForm();
   }, [profile]);
 
-  const fetchUserData = async () => {
-    try {
-      const { data: profileData } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-      const { data: analysesData } = await supabase.from('resume_analyses').select('*').eq('user_id', user.id).order('uploaded_at', { ascending: false });
-      const { data: skillsData } = await supabase.from('skill_tracking').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
-      const { data: certsData } = await supabase.from('saved_certifications').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
-      const { data: coursesData } = await supabase.from('ongoing_courses').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+  const resetProfileForm = () => {
+    setFormData({
+      full_name: profile?.full_name || '',
+      phone: profile?.phone || '',
+      address: profile?.address || '',
+      city: profile?.city || '',
+      state: profile?.state || '',
+      zip_code: profile?.zip_code || ''
+    });
+  };
 
-      setProfile(profileData);
-      setAnalyses(analysesData || []);
-      setTrackedSkills(skillsData || []);
-      setCertifications(certsData || []);
-      setOngoingCourses(coursesData || []);
+  const showMessage = (message, type = 'success') => setNotice({ message, type });
+
+  const fetchUserData = async () => {
+    setLoading(true);
+    try {
+      const [profileResult, analysesResult, skillsResult, certsResult, coursesResult] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+        supabase.from('resume_analyses').select('*').eq('user_id', user.id).order('uploaded_at', { ascending: false }),
+        supabase.from('skill_tracking').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabase.from('saved_certifications').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabase.from('ongoing_courses').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
+      ]);
+
+      for (const result of [profileResult, analysesResult, skillsResult, certsResult, coursesResult]) {
+        if (result.error) throw result.error;
+      }
+
+      setProfile(profileResult.data || null);
+      setAnalyses(analysesResult.data || []);
+      setTrackedSkills(skillsResult.data || []);
+      setCertifications(certsResult.data || []);
+      setOngoingCourses(coursesResult.data || []);
     } catch (error) {
       console.error('Error fetching user data:', error);
+      showMessage(`Could not load all saved profile data: ${error.message}`, 'error');
     } finally {
       setLoading(false);
     }
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      showMessage(`Logout failed: ${error.message}`, 'error');
+      return;
+    }
     onLogout();
   };
 
-  const handleInputChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
-  
   const handleSaveProfile = async () => {
     setSavingProfile(true);
-    const { error } = await supabase.from('profiles').upsert({ id: user.id, ...formData }, { onConflict: 'id' });
-    if (!error) { setProfile({ ...profile, ...formData }); setIsEditing(false); }
-    setSavingProfile(false);
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .upsert({ id: user.id, ...formData, updated_at: new Date().toISOString() }, { onConflict: 'id' })
+        .select()
+        .single();
+      if (error) throw error;
+      setProfile(data);
+      setIsEditingProfile(false);
+      showMessage('Profile saved.');
+    } catch (error) {
+      showMessage(`Profile could not be saved: ${error.message}`, 'error');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleCancelProfile = () => {
+    resetProfileForm();
+    setIsEditingProfile(false);
   };
 
   const handleAddSkill = async (e) => {
     e.preventDefault();
-    if (!newSkill.skill_name) return;
-    
-    // Check if skill is verified by any certificate
-    const verifiedByCert = certifications.some(cert => 
-      cert.certification_name.toLowerCase().includes(newSkill.skill_name.toLowerCase()) ||
-      newSkill.skill_name.toLowerCase().includes(cert.certification_name.toLowerCase())
-    );
-    
-    // Check if skill is being learned in any course
-    const learningInCourse = ongoingCourses.some(course =>
-      course.course_name.toLowerCase().includes(newSkill.skill_name.toLowerCase()) ||
-      newSkill.skill_name.toLowerCase().includes(course.course_name.toLowerCase())
-    );
+    if (!newSkill.skill_name.trim()) return;
 
-    let verificationStatus = newSkill.proficiency_level === 'beginner' ? 'self_reported' : 'self_reported';
-    let source = 'self_reported';
-    
-    if (verifiedByCert) {
-      verificationStatus = 'certificate_verified';
-      source = 'certificate_verified';
-    } else if (learningInCourse) {
-      verificationStatus = 'in_progress';
-      source = 'ongoing_course';
+    const duplicate = trackedSkills.find((item) => normalizeName(item.skill_name) === normalizeName(newSkill.skill_name));
+    if (duplicate) {
+      showMessage('That skill is already in your profile. Update the existing skill instead.', 'error');
+      return;
     }
-    
-    const { data, error } = await supabase.from('skill_tracking').insert([{ 
-      user_id: user.id, 
-      ...newSkill,
-      verification_status: verificationStatus,
-      source: source
-    }]).select();
-    if (!error && data) { 
-      setTrackedSkills([data[0], ...trackedSkills]); 
-      setNewSkill({ ...newSkill, skill_name: '' }); 
+
+    try {
+      const { data, error } = await supabase.from('skill_tracking').insert({
+        user_id: user.id,
+        ...newSkill,
+        skill_name: newSkill.skill_name.trim(),
+        source: 'self_reported',
+        verification_status: 'self_reported',
+        confidence: 1,
+        metadata: { entry_method: 'manual' }
+      }).select().single();
+      if (error) throw error;
+      setTrackedSkills((current) => [data, ...current]);
+      setNewSkill({ ...newSkill, skill_name: '' });
+      showMessage('Skill added as self-reported.');
+    } catch (error) {
+      showMessage(`Skill could not be saved: ${error.message}`, 'error');
     }
   };
 
   const handleUpdateSkill = async (id, updates) => {
-    await supabase.from('skill_tracking').update(updates).eq('id', id);
-    setTrackedSkills(trackedSkills.map(s => s.id === id ? { ...s, ...updates } : s));
+    try {
+      const { data, error } = await supabase
+        .from('skill_tracking')
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) throw error;
+      setTrackedSkills((current) => current.map((skill) => skill.id === id ? data : skill));
+    } catch (error) {
+      showMessage(`Skill update failed: ${error.message}`, 'error');
+    }
   };
 
   const handleDeleteSkill = async (id) => {
-    await supabase.from('skill_tracking').delete().eq('id', id);
-    setTrackedSkills(trackedSkills.filter(s => s.id !== id));
+    if (!window.confirm('Delete this skill from your profile?')) return;
+    const { error } = await supabase.from('skill_tracking').delete().eq('id', id);
+    if (error) return showMessage(`Skill could not be deleted: ${error.message}`, 'error');
+    setTrackedSkills((current) => current.filter((skill) => skill.id !== id));
   };
 
-  const handleCertFileChange = (e) => setCertFile(e.target.files[0]);
-
-  const handleUploadAndVerifyCert = async (e) => {
+  const handleCourseSubmit = async (e) => {
     e.preventDefault();
-    if (!certFile) return;
-    setUploadingCert(true);
+    if (!courseForm.course_name.trim()) return;
+
     try {
-      const apiUrl = import.meta.env.VITE_API_URL;
-      if (!apiUrl) throw new Error('API URL not configured');
-      const formData = new FormData();
-      formData.append('file', certFile);
-      const response = await fetch(`${apiUrl}/api/verify-certificate`, { method: 'POST', body: formData });
-      if (!response.ok) {
-        let msg = 'Failed to process certificate';
-        try { const d = await response.json(); msg = d.detail || msg; } catch { /* use default */ }
-        throw new Error(msg);
-      }
-      const data = await response.json();
-      setNewCert({
-        certification_name: data.certification_name || newCert.certification_name,
-        provider: data.provider || newCert.provider,
-        credential_id: data.credential_id || newCert.credential_id,
-        verification_url: data.verification_url || newCert.verification_url,
-        status: 'completed'
-      });
-      alert('Certificate processed! Details extracted.');
-    } catch (error) {
-      if (error.message === 'Failed to fetch' || error.name === 'TypeError') {
-        alert('Cannot reach server. Make sure the backend is running at ' + (import.meta.env.VITE_API_URL || 'http://localhost:8000'));
+      if (editingCourseId) {
+        const { data, error } = await supabase
+          .from('ongoing_courses')
+          .update({ ...courseForm, course_name: courseForm.course_name.trim() })
+          .eq('id', editingCourseId)
+          .select()
+          .single();
+        if (error) throw error;
+        setOngoingCourses((current) => current.map((course) => course.id === editingCourseId ? data : course));
+        showMessage('Course updated.');
       } else {
-        alert('Error processing certificate: ' + error.message);
+        const { data, error } = await supabase.from('ongoing_courses').insert({
+          user_id: user.id,
+          ...courseForm,
+          course_name: courseForm.course_name.trim(),
+          status: courseForm.status || 'in_progress'
+        }).select().single();
+        if (error) throw error;
+        setOngoingCourses((current) => [data, ...current]);
+        showMessage('Ongoing course saved.');
       }
-    } finally {
-      setUploadingCert(false);
+      setEditingCourseId(null);
+      setCourseForm(emptyCourse);
+    } catch (error) {
+      showMessage(`Course could not be saved: ${error.message}`, 'error');
     }
   };
 
-  const handleAddCert = async (e) => {
+  const startCourseEdit = (course) => {
+    setEditingCourseId(course.id);
+    setCourseForm({
+      course_name: course.course_name || '',
+      provider: course.provider || '',
+      expected_completion_date: course.expected_completion_date || '',
+      status: course.status || 'in_progress'
+    });
+  };
+
+  const cancelCourseEdit = () => {
+    setEditingCourseId(null);
+    setCourseForm(emptyCourse);
+  };
+
+  const handleDeleteCourse = async (id) => {
+    if (!window.confirm('Delete this course?')) return;
+    const { error } = await supabase.from('ongoing_courses').delete().eq('id', id);
+    if (error) return showMessage(`Course could not be deleted: ${error.message}`, 'error');
+    setOngoingCourses((current) => current.filter((course) => course.id !== id));
+    if (editingCourseId === id) cancelCourseEdit();
+  };
+
+  const verificationPayload = (cert) => ({
+    certification_name: cert.certification_name || '',
+    provider: cert.provider || '',
+    holder_name: cert.holder_name || '',
+    credential_id: cert.credential_id || '',
+    verification_url: cert.verification_url || ''
+  });
+
+  const callLinkVerification = async (cert) => {
+    const response = await fetch(`${apiBase()}/api/verify-certificate-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(verificationPayload(cert))
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `Verification service returned ${response.status}`);
+    }
+    return response.json();
+  };
+
+  const persistCertificateSkills = async (certificateRow, extractedSkills = []) => {
+    if (!extractedSkills.length) return;
+
+    const { data: existing, error: existingError } = await supabase
+      .from('skill_tracking')
+      .select('*')
+      .eq('user_id', user.id);
+    if (existingError) throw existingError;
+
+    const byName = new Map((existing || []).map((skill) => [normalizeName(skill.skill_name), skill]));
+    for (const skill of extractedSkills) {
+      if (!skill?.name) continue;
+      const key = normalizeName(skill.name);
+      const current = byName.get(key);
+      const verified = Boolean(certificateRow.is_verified);
+      const source = verified ? 'certificate_verified' : 'certificate_extracted';
+      const verificationStatus = verified ? 'certificate_verified' : 'certificate_extracted_unverified';
+      const confidence = Number.isFinite(Number(skill.confidence)) ? Number(skill.confidence) : 0.9;
+
+      if (current) {
+        const shouldPromote = verified && current.verification_status !== 'certificate_verified';
+        const updates = {
+          confidence: Math.max(Number(current.confidence || 0), confidence),
+          evidence: `Certificate: ${certificateRow.certification_name}`,
+          metadata: {
+            ...(current.metadata || {}),
+            certificate_id: certificateRow.id,
+            certificate_name: certificateRow.certification_name
+          },
+          updated_at: new Date().toISOString()
+        };
+        if (shouldPromote) {
+          updates.source = source;
+          updates.verification_status = verificationStatus;
+          updates.source_record_id = certificateRow.id;
+        }
+        const { error } = await supabase.from('skill_tracking').update(updates).eq('id', current.id);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase.from('skill_tracking').insert({
+          user_id: user.id,
+          skill_name: skill.name.trim(),
+          category: skill.category || 'Certification Skill',
+          proficiency_level: 'unknown',
+          status: 'existing',
+          source,
+          verification_status: verificationStatus,
+          confidence,
+          evidence: `Certificate: ${certificateRow.certification_name}`,
+          source_record_id: certificateRow.id,
+          metadata: { certificate_name: certificateRow.certification_name }
+        }).select().single();
+        if (error) throw error;
+        byName.set(key, data);
+      }
+    }
+  };
+
+  const persistCertificate = async (result, rawExtraction = result) => {
+    const row = {
+      user_id: user.id,
+      certification_name: result.certification_name || 'Unknown certificate',
+      provider: result.provider || 'Unknown',
+      holder_name: result.holder_name || null,
+      credential_id: result.credential_id || null,
+      verification_url: result.verification_url || null,
+      is_verified: Boolean(result.is_verified),
+      verified_at: result.is_verified ? new Date().toISOString() : null,
+      verification_status: result.verification_status || 'no_verification_link',
+      verification_method: result.verification_method || 'none',
+      verification_message: result.verification_message || null,
+      verification_evidence: result.verification_evidence || [],
+      verified_url: result.verified_url || null,
+      issued_at: result.issue_date || null,
+      expires_at: result.expiration_date || null,
+      extracted_skills: result.extracted_skills || [],
+      raw_extraction: rawExtraction || {},
+      status: result.status || 'completed',
+      source: result.is_verified ? 'certificate_verified' : 'certificate_extracted',
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: saved, error } = await supabase.from('saved_certifications').insert(row).select().single();
+    if (error) throw error;
+    await persistCertificateSkills(saved, result.extracted_skills || []);
+    return saved;
+  };
+
+  const handleCertificateUpload = async (e) => {
     e.preventDefault();
-    // Use filename as fallback if name is empty
-    if (!newCert.certification_name) {
-      alert('Please enter certification name or extract it from a certificate file first.');
-      return;
-    }
-    
-    let verificationStatus = 'self_reported';
-    let isVerified = false;
-    
-    if (newCert.verification_url) {
-      verificationStatus = 'url_provided';
-      if (newCert.verification_url.match(/(aws\.amazon\.com|coursera\.org|udemy\.com|edx\.org|google\.com|microsoft\.com|cisco\.com|comptia\.org|credly\.com)/i)) {
-        verificationStatus = 'auto_verified';
-        isVerified = true;
+    if (!certFiles.length) return;
+    setUploadingCert(true);
+    setNotice(null);
+
+    const savedRows = [];
+    const failures = [];
+    for (const file of certFiles) {
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await fetch(`${apiBase()}/api/verify-certificate`, { method: 'POST', body: formData });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.detail || `Certificate processing returned ${response.status}`);
+        }
+        const result = await response.json();
+        savedRows.push(await persistCertificate(result));
+      } catch (error) {
+        failures.push(`${file.name}: ${error.message}`);
       }
     }
-    
-    const { data, error } = await supabase.from('saved_certifications').insert([{ 
-      user_id: user.id, 
-      ...newCert,
-      verification_status: verificationStatus,
-      is_verified: isVerified,
-      verified_at: isVerified ? new Date().toISOString() : null
-    }]).select();
-    
-    if (!error && data) { 
-      setCertifications([data[0], ...certifications]); 
-      setNewCert({ certification_name: '', provider: '', credential_id: '', verification_url: '', status: 'recommended' });
-      setCertFile(null);
+
+    if (savedRows.length) {
+      setCertifications((current) => [...savedRows.reverse(), ...current]);
+      await fetchUserData();
+    }
+    setCertFiles([]);
+    setUploadingCert(false);
+
+    if (failures.length) {
+      showMessage(`${savedRows.length} certificate(s) saved. ${failures.length} failed: ${failures.join(' | ')}`, 'error');
+    } else {
+      showMessage(`${savedRows.length} certificate(s) processed, classified, and saved automatically.`);
     }
   };
 
-  const handleVerifyCertificate = async (cert) => {
+  const handleManualCertSave = async (e) => {
+    e.preventDefault();
+    if (!manualCert.certification_name.trim()) return;
+    setSavingManualCert(true);
+    try {
+      let verification = {
+        ...manualCert,
+        verification_status: manualCert.verification_url ? 'verification_link_found_unconfirmed' : 'no_verification_link',
+        verification_method: manualCert.verification_url ? 'manual_review' : 'none',
+        verification_message: manualCert.verification_url ? 'Verification link saved for automatic checking.' : 'No verification link provided.',
+        verification_evidence: [],
+        is_verified: false,
+        extracted_skills: []
+      };
+      if (manualCert.verification_url) verification = { ...verification, ...(await callLinkVerification(manualCert)) };
+      const saved = await persistCertificate(verification, { entry_method: 'manual' });
+      setCertifications((current) => [saved, ...current]);
+      setManualCert(emptyCert);
+      showMessage('Manual certificate entry saved with its verification classification.');
+    } catch (error) {
+      showMessage(`Certificate could not be saved: ${error.message}`, 'error');
+    } finally {
+      setSavingManualCert(false);
+    }
+  };
+
+  const handleReverifyCertificate = async (cert) => {
+    if (!cert.verification_url) return;
     setVerifyingCert(cert.id);
     try {
-      if (cert.verification_url) {
-        window.open(cert.verification_url, '_blank', 'noopener,noreferrer');
-        await supabase.from('saved_certifications').update({
-          is_verified: true,
-          verified_at: new Date().toISOString(),
-          verification_status: 'manually_verified'
-        }).eq('id', cert.id);
-        setCertifications(certifications.map(c => c.id === cert.id ? { ...c, is_verified: true, verified_at: new Date().toISOString(), verification_status: 'manually_verified' } : c));
+      const result = await callLinkVerification(cert);
+      const updates = {
+        verification_status: result.verification_status,
+        verification_method: result.verification_method,
+        verification_message: result.verification_message,
+        verification_evidence: result.verification_evidence || [],
+        verified_url: result.verified_url || null,
+        is_verified: Boolean(result.is_verified),
+        verified_at: result.is_verified ? new Date().toISOString() : null,
+        source: result.is_verified ? 'certificate_verified' : cert.source,
+        updated_at: new Date().toISOString()
+      };
+      const { data: updated, error } = await supabase.from('saved_certifications').update(updates).eq('id', cert.id).select().single();
+      if (error) throw error;
+
+      if (updated.is_verified) {
+        const { error: skillError } = await supabase.from('skill_tracking').update({
+          source: 'certificate_verified',
+          verification_status: 'certificate_verified',
+          updated_at: new Date().toISOString()
+        }).eq('source_record_id', cert.id);
+        if (skillError) throw skillError;
       }
+
+      setCertifications((current) => current.map((item) => item.id === cert.id ? updated : item));
+      await fetchUserData();
+      showMessage(updated.is_verified ? 'Certificate electronically verified.' : updated.verification_message || 'Verification classification updated.');
     } catch (error) {
-      console.error('Verification error:', error);
+      showMessage(`Verification attempt failed: ${error.message}`, 'error');
     } finally {
       setVerifyingCert(null);
     }
   };
 
-  const handleUpdateCert = async (id, updates) => {
-    await supabase.from('saved_certifications').update(updates).eq('id', id);
-    setCertifications(certifications.map(c => c.id === id ? { ...c, ...updates } : c));
+  const handleUpdateCertStatus = async (id, status) => {
+    const { data, error } = await supabase.from('saved_certifications').update({ status, updated_at: new Date().toISOString() }).eq('id', id).select().single();
+    if (error) return showMessage(`Certificate update failed: ${error.message}`, 'error');
+    setCertifications((current) => current.map((cert) => cert.id === id ? data : cert));
   };
 
   const handleDeleteCert = async (id) => {
-    await supabase.from('saved_certifications').delete().eq('id', id);
-    setCertifications(certifications.filter(c => c.id !== id));
-  };
-
-  const handleAddCourse = async (e) => {
-    e.preventDefault();
-    if (!newCourse.course_name) return;
-    try {
-      const { data, error } = await supabase.from('ongoing_courses').insert([{
-        user_id: user.id,
-        course_name: newCourse.course_name,
-        provider: newCourse.provider,
-        expected_completion_date: newCourse.expected_completion_date,
-        status: 'in_progress'
-      }]).select();
-      
-      if (error) throw error;
-      
-      setOngoingCourses([data[0], ...ongoingCourses]);
-      setNewCourse({ course_name: '', provider: '', expected_completion_date: '' });
-    } catch (err) {
-      console.error('Error adding course:', err);
-      alert('Error saving course: ' + err.message);
-    }
-  };
-
-  const handleDeleteCourse = async (id) => {
-    await supabase.from('ongoing_courses').delete().eq('id', id);
-    setOngoingCourses(ongoingCourses.filter(c => c.id !== id));
+    if (!window.confirm('Delete this certificate record? Skills learned from other sources will remain.')) return;
+    const { error } = await supabase.from('saved_certifications').delete().eq('id', id);
+    if (error) return showMessage(`Certificate could not be deleted: ${error.message}`, 'error');
+    setCertifications((current) => current.filter((cert) => cert.id !== id));
   };
 
   const getVerificationBadge = (cert) => {
-    if (cert.is_verified) return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">✓ Verified</span>;
-    if (cert.verification_url) return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">🔗 URL Provided</span>;
-    return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">⚠ Self-Reported</span>;
+    const status = cert.verification_status;
+    if (cert.is_verified || status === 'electronically_verified') return <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">Electronically Verified</span>;
+    if (status === 'no_verification_link') return <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700">No Verification Link</span>;
+    if (status === 'verification_unavailable') return <span className="rounded-full bg-orange-100 px-2 py-1 text-xs font-medium text-orange-800">Verification Unavailable</span>;
+    if (status === 'verification_page_reached_unconfirmed') return <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800">Page Reached, Unconfirmed</span>;
+    if (status === 'verification_link_invalid' || status === 'verification_redirect_untrusted') return <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-800">Verification Link Rejected</span>;
+    return <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">Manual Review</span>;
   };
 
   const getSkillVerificationBadge = (skill) => {
-    if (skill.verification_status === 'certificate_verified') {
-      return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">🏆 Certificate Verified</span>;
-    }
-    if (skill.verification_status === 'in_progress') {
-      return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">📚 In Progress</span>;
-    }
-    if (skill.verification_status === 'ai_verified') {
-      return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">🤖 AI Extracted</span>;
-    }
-    return <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">📝 Self-Reported</span>;
+    if (skill.verification_status === 'certificate_verified') return <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">Certificate Verified</span>;
+    if (skill.verification_status === 'certificate_extracted_unverified') return <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800">Certificate Extracted</span>;
+    if (skill.verification_status === 'in_progress') return <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">In Progress</span>;
+    if (skill.verification_status === 'ai_verified') return <span className="rounded-full bg-purple-100 px-2 py-1 text-xs font-medium text-purple-800">AI Extracted</span>;
+    return <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">Self-Reported</span>;
   };
 
-  const filteredSkills = trackedSkills.filter(skill => {
+  const filteredSkills = trackedSkills.filter((skill) => {
     if (skillFilter === 'all') return true;
-    if (skillFilter === 'verified') return skill.verification_status === 'certificate_verified' || skill.verification_status === 'ai_verified';
+    if (skillFilter === 'verified') return skill.verification_status === 'certificate_verified';
+    if (skillFilter === 'extracted') return ['ai_verified', 'certificate_extracted_unverified'].includes(skill.verification_status);
     if (skillFilter === 'in_progress') return skill.verification_status === 'in_progress';
     if (skillFilter === 'self_reported') return skill.verification_status === 'self_reported';
     return true;
   });
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-indigo-600"></div>
-      </div>
-    );
-  }
+  if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-indigo-600" /></div>;
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-gradient-to-r from-indigo-700 to-purple-700 text-white py-6">
-        <div className="container mx-auto px-4 flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-bold">Skills Pathfinder</h1>
-            <p className="text-indigo-100 mt-1">Your Career Journey</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="text-right">
-              <p className="font-semibold">{profile?.full_name || 'User'}</p>
-              <p className="text-sm text-indigo-200">{user.email}</p>
-            </div>
-            <button onClick={onStartOnboarding} className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg transition-colors text-sm font-semibold">
-              🚀 Complete Profile
-            </button>
-            <button 
-              onClick={() => setShowReport(true)} 
-              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg transition-colors text-sm font-semibold flex items-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-              Generate Report
-            </button>
-            <button onClick={handleLogout} className="bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition-colors">Logout</button>
+      <header className="bg-gradient-to-r from-indigo-700 to-purple-700 py-6 text-white">
+        <div className="container mx-auto flex flex-col gap-4 px-4 md:flex-row md:items-center md:justify-between">
+          <div><h1 className="text-2xl font-bold">Skills Pathfinder</h1><p className="mt-1 text-indigo-100">Your Career Journey</p></div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="mr-2 text-right"><p className="font-semibold">{profile?.full_name || 'User'}</p><p className="text-sm text-indigo-200">{user.email}</p></div>
+            <button onClick={onStartOnboarding} className="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold hover:bg-yellow-600">Update Profile Journey</button>
+            <button onClick={() => setShowReport(true)} className="rounded-lg bg-green-500 px-4 py-2 text-sm font-semibold hover:bg-green-600">Generate Report</button>
+            <button onClick={handleLogout} className="rounded-lg bg-white/20 px-4 py-2 hover:bg-white/30">Logout</button>
           </div>
         </div>
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h2 className="font-semibold text-gray-800 mb-4">Menu</h2>
+        {notice && <div className={`mb-5 rounded-lg border p-4 text-sm ${notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-green-200 bg-green-50 text-green-800'}`}><div className="flex justify-between gap-4"><span>{notice.message}</span><button onClick={() => setNotice(null)}>Close</button></div></div>}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+          <aside className="lg:col-span-1">
+            <div className="rounded-xl bg-white p-6 shadow-lg">
+              <h2 className="mb-4 font-semibold text-gray-800">Menu</h2>
               <nav className="space-y-2">
-                {['history', 'profile', 'skills', 'certifications'].map(tab => (
-                  <button
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    className={`w-full text-left px-4 py-2 rounded-lg transition-colors capitalize ${
-                      activeTab === tab ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    {tab === 'history' && '📄 Resume History'}
-                    {tab === 'profile' && ' My Profile'}
-                    {tab === 'skills' && '📈 Skill Tracking'}
-                    {tab === 'certifications' && '🏆 Certifications'}
-                  </button>
-                ))}
+                {[
+                  ['history', 'Resume History'], ['profile', 'My Profile'], ['skills', 'Skills & Courses'], ['certifications', 'Certifications']
+                ].map(([tab, label]) => <button key={tab} onClick={() => setActiveTab(tab)} className={`w-full rounded-lg px-4 py-2 text-left ${activeTab === tab ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}>{label}</button>)}
               </nav>
             </div>
-          </div>
+          </aside>
 
-          <div className="lg:col-span-3">
-            {activeTab === 'history' ? (
-              children ? children : (
-                <div className="bg-white rounded-xl shadow-lg p-6">
-                  <h2 className="text-2xl font-bold text-gray-800 mb-6">Resume Analysis History</h2>
-                  {analyses.length === 0 ? (
-                    <div className="text-center py-12">
-                      <p className="text-gray-500 mb-4">No resumes analyzed yet</p>
-                      <button onClick={() => onViewAnalysis()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg transition-colors">Upload Your First Resume</button>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {analyses.map((analysis) => (
-                        <div key={analysis.id} className="border border-gray-200 rounded-lg p-4 hover:border-indigo-300 transition-colors cursor-pointer" onClick={() => onViewAnalysis(analysis)}>
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <h3 className="font-semibold text-gray-800">{analysis.filename}</h3>
-                              <p className="text-sm text-gray-500 mt-1">{new Date(analysis.uploaded_at).toLocaleDateString()} • {analysis.skills_count} skills found</p>
-                            </div>
-                            <span className="text-indigo-600 text-sm">View Details →</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            ) : activeTab === 'profile' ? (
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-2xl font-bold text-gray-800">My Profile</h2>
-                  {!isEditing ? (
-                    <button onClick={() => setIsEditing(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm">Edit Profile</button>
-                  ) : (
-                    <div className="flex gap-2">
-                      <button onClick={() => setIsEditing(false)} className="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg text-sm">Cancel</button>
-                      <button onClick={handleSaveProfile} disabled={savingProfile} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm">{savingProfile ? 'Saving...' : 'Save Changes'}</button>
-                    </div>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {['full_name', 'phone', 'address', 'city', 'state', 'zip_code'].map((field) => (
-                    <div key={field}>
-                      <label className="block text-sm font-medium text-gray-700 mb-1 capitalize">{field.replace('_', ' ')}</label>
-                      {isEditing ? (
-                        <input type="text" name={field} value={formData[field] || ''} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                      ) : (
-                        <p className="text-gray-900 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 min-h-[42px]">{profile?.[field] || 'Not provided'}</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : activeTab === 'skills' ? (
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h2 className="text-2xl font-bold text-gray-800 mb-6">Skill Development Tracking</h2>
-                
-                <form onSubmit={handleAddSkill} className="bg-gray-50 p-4 rounded-lg mb-6 flex flex-col md:flex-row gap-4">
-                  <input type="text" placeholder="Skill Name (e.g., React.js)" value={newSkill.skill_name} onChange={(e) => setNewSkill({...newSkill, skill_name: e.target.value})} className="flex-1 border border-gray-300 rounded-lg px-3 py-2" required />
-                  <select value={newSkill.category} onChange={(e) => setNewSkill({...newSkill, category: e.target.value})} className="border border-gray-300 rounded-lg px-3 py-2">
-                    <option>Programming Language</option><option>Framework/Library</option><option>Tool/Software</option><option>Domain Knowledge</option><option>Methodology</option><option>Soft Skill</option>
-                  </select>
-                  <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg">Add Skill</button>
-                </form>
+          <section className="lg:col-span-3">
+            {activeTab === 'history' && (children || <div className="rounded-xl bg-white p-6 shadow-lg"><h2 className="mb-6 text-2xl font-bold">Resume Analysis History</h2>{analyses.length === 0 ? <div className="py-12 text-center"><p className="mb-4 text-gray-500">No resumes analyzed yet.</p><button onClick={() => onViewAnalysis()} className="rounded-lg bg-indigo-600 px-6 py-2 text-white">Upload Resume</button></div> : <div className="space-y-3">{analyses.map((analysis) => <button key={analysis.id} onClick={() => onViewAnalysis(analysis)} className="block w-full rounded-lg border p-4 text-left hover:border-indigo-300"><div className="flex justify-between"><div><h3 className="font-semibold">{analysis.filename}</h3><p className="text-sm text-gray-500">{analysis.uploaded_at ? new Date(analysis.uploaded_at).toLocaleDateString() : ''} • {analysis.skills_count || 0} skills</p></div><span className="text-indigo-600">View Details</span></div></button>)}</div>}</div>)}
 
-                {/* Ongoing Courses Section */}
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                  <h3 className="font-semibold text-blue-900 mb-3">📚 Ongoing Courses</h3>
-                  <form onSubmit={handleAddCourse} className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-                    <input 
-                      type="text" 
-                      placeholder="Course Name" 
-                      value={newCourse.course_name}
-                      onChange={(e) => setNewCourse({...newCourse, course_name: e.target.value})}
-                      className="border border-gray-300 rounded-lg px-3 py-2 md:col-span-2"
-                      required
-                    />
-                    <input 
-                      type="text" 
-                      placeholder="Provider (e.g., Coursera)" 
-                      value={newCourse.provider}
-                      onChange={(e) => setNewCourse({...newCourse, provider: e.target.value})}
-                      className="border border-gray-300 rounded-lg px-3 py-2"
-                    />
-                    <input 
-                      type="date" 
-                      value={newCourse.expected_completion_date}
-                      onChange={(e) => setNewCourse({...newCourse, expected_completion_date: e.target.value})}
-                      className="border border-gray-300 rounded-lg px-3 py-2"
-                    />
-                    <button 
-                      type="submit" 
-                      className="md:col-span-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
-                    >
-                      Add Course
-                    </button>
-                  </form>
-                  
-                  {ongoingCourses.length > 0 && (
-                    <div className="space-y-2">
-                      {ongoingCourses.map((course) => (
-                        <div key={course.id} className="bg-white border border-blue-200 rounded-lg p-3 flex justify-between items-center">
-                          <div>
-                            <p className="font-medium text-gray-800">{course.course_name}</p>
-                            <p className="text-sm text-gray-600">{course.provider} {course.expected_completion_date && `• Expected: ${new Date(course.expected_completion_date).toLocaleDateString()}`}</p>
-                          </div>
-                          <button 
-                            onClick={() => handleDeleteCourse(course.id)} 
-                            className="text-red-500 hover:text-red-700 text-sm"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+            {activeTab === 'profile' && <div className="rounded-xl bg-white p-6 shadow-lg"><div className="mb-6 flex justify-between"><h2 className="text-2xl font-bold">My Profile</h2>{!isEditingProfile ? <button onClick={() => setIsEditingProfile(true)} className="rounded-lg bg-indigo-600 px-4 py-2 text-white">Edit</button> : <div className="flex gap-2"><button onClick={handleCancelProfile} className="rounded-lg bg-gray-200 px-4 py-2">Cancel</button><button onClick={handleSaveProfile} disabled={savingProfile} className="rounded-lg bg-green-600 px-4 py-2 text-white disabled:opacity-50">{savingProfile ? 'Saving...' : 'Save'}</button></div>}</div><div className="grid grid-cols-1 gap-5 md:grid-cols-2">{['full_name','phone','address','city','state','zip_code'].map((field) => <div key={field}><label className="mb-1 block text-sm font-medium capitalize">{field.replace('_',' ')}</label>{isEditingProfile ? <input value={formData[field] || ''} onChange={(e) => setFormData({ ...formData, [field]: e.target.value })} className="w-full rounded-lg border px-3 py-2" /> : <div className="min-h-10 rounded-lg border bg-gray-50 px-3 py-2">{profile?.[field] || 'Not provided'}</div>}</div>)}</div></div>}
 
-                <div className="flex gap-2 mb-6 flex-wrap border-b pb-4">
-                  <button onClick={() => setSkillFilter('all')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${skillFilter === 'all' ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-                    All Skills ({trackedSkills.length})
-                  </button>
-                  <button onClick={() => setSkillFilter('verified')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${skillFilter === 'verified' ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-                    ✓ Verified ({trackedSkills.filter(s => s.verification_status === 'certificate_verified' || s.verification_status === 'ai_verified').length})
-                  </button>
-                  <button onClick={() => setSkillFilter('in_progress')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${skillFilter === 'in_progress' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-                    📚 In Progress ({trackedSkills.filter(s => s.verification_status === 'in_progress').length})
-                  </button>
-                  <button onClick={() => setSkillFilter('self_reported')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${skillFilter === 'self_reported' ? 'bg-yellow-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-                     Self-Reported ({trackedSkills.filter(s => s.verification_status === 'self_reported').length})
-                  </button>
-                </div>
+            {activeTab === 'skills' && <div className="space-y-6">
+              <div className="rounded-xl bg-white p-6 shadow-lg"><h2 className="mb-4 text-2xl font-bold">Skill Inventory</h2><form onSubmit={handleAddSkill} className="grid grid-cols-1 gap-3 rounded-lg bg-gray-50 p-4 md:grid-cols-4"><input required placeholder="Skill name" value={newSkill.skill_name} onChange={(e) => setNewSkill({ ...newSkill, skill_name: e.target.value })} className="rounded border px-3 py-2 md:col-span-2" /><select value={newSkill.category} onChange={(e) => setNewSkill({ ...newSkill, category: e.target.value })} className="rounded border px-3 py-2"><option>Domain Knowledge</option><option>Programming Language</option><option>Framework/Library</option><option>Tool/Software</option><option>Data/Analytics</option><option>Healthcare</option><option>Business</option><option>Methodology/Standard</option><option>Soft Skill</option><option>Other</option></select><button className="rounded bg-indigo-600 px-4 py-2 text-white">Add Self-Reported Skill</button></form><div className="my-5 flex flex-wrap gap-2">{[['all','All'],['verified','Verified'],['extracted','Extracted'],['in_progress','In Progress'],['self_reported','Self-Reported']].map(([key,label]) => <button key={key} onClick={() => setSkillFilter(key)} className={`rounded-lg px-3 py-2 text-sm ${skillFilter === key ? 'bg-indigo-600 text-white' : 'bg-gray-200'}`}>{label}</button>)}</div><div className="space-y-3">{filteredSkills.map((skill) => <div key={skill.id} className="flex flex-col justify-between gap-3 rounded-lg border p-4 md:flex-row md:items-center"><div><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{skill.skill_name}</h3>{getSkillVerificationBadge(skill)}</div><p className="text-sm text-gray-500">{skill.category || 'General'}{skill.evidence ? ` • ${skill.evidence}` : ''}</p></div><div className="flex items-center gap-2"><select value={skill.proficiency_level || 'unknown'} onChange={(e) => handleUpdateSkill(skill.id, { proficiency_level: e.target.value })} className="rounded border px-2 py-1 text-sm"><option value="unknown">Unknown</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option><option value="expert">Expert</option></select><button onClick={() => handleDeleteSkill(skill.id)} className="text-sm text-red-600">Delete</button></div></div>)}{filteredSkills.length === 0 && <p className="py-6 text-center text-gray-500">No skills in this category.</p>}</div></div>
 
-                {filteredSkills.length === 0 ? (
-                  <p className="text-gray-500 text-center py-8">No skills found for this filter.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {filteredSkills.map((skill) => {
-                      const verifyingCerts = certifications.filter(cert => 
-                        cert.is_verified && (
-                          cert.certification_name.toLowerCase().includes(skill.skill_name.toLowerCase()) ||
-                          skill.skill_name.toLowerCase().includes(cert.certification_name.toLowerCase())
-                        )
-                      );
+              <div className="rounded-xl bg-white p-6 shadow-lg"><h2 className="mb-2 text-2xl font-bold">Ongoing Courses</h2><p className="mb-4 text-sm text-gray-600">Manual entry is expected here. These courses are used to identify skills already in progress and avoid duplicate learning recommendations.</p><form onSubmit={handleCourseSubmit} className="grid grid-cols-1 gap-3 rounded-lg bg-blue-50 p-4 md:grid-cols-4"><input required placeholder="Course name" value={courseForm.course_name} onChange={(e) => setCourseForm({ ...courseForm, course_name: e.target.value })} className="rounded border px-3 py-2 md:col-span-2" /><input placeholder="Provider" value={courseForm.provider} onChange={(e) => setCourseForm({ ...courseForm, provider: e.target.value })} className="rounded border px-3 py-2" /><input type="date" value={courseForm.expected_completion_date} onChange={(e) => setCourseForm({ ...courseForm, expected_completion_date: e.target.value })} className="rounded border px-3 py-2" /><select value={courseForm.status} onChange={(e) => setCourseForm({ ...courseForm, status: e.target.value })} className="rounded border px-3 py-2"><option value="in_progress">In Progress</option><option value="paused">Paused</option><option value="completed">Completed</option></select><div className="flex gap-2 md:col-span-3"><button className="rounded bg-blue-600 px-4 py-2 text-white">{editingCourseId ? 'Update Course' : 'Add Course'}</button>{editingCourseId && <button type="button" onClick={cancelCourseEdit} className="rounded bg-gray-200 px-4 py-2">Cancel</button>}</div></form><div className="mt-4 space-y-2">{ongoingCourses.map((course) => <div key={course.id} className="flex flex-col justify-between gap-3 rounded-lg border p-4 md:flex-row md:items-center"><div><h3 className="font-medium">{course.course_name}</h3><p className="text-sm text-gray-500">{course.provider || 'Provider not specified'}{course.expected_completion_date ? ` • Expected ${new Date(course.expected_completion_date).toLocaleDateString()}` : ''} • {course.status || 'in_progress'}</p></div><div className="flex gap-3"><button onClick={() => startCourseEdit(course)} className="text-sm text-indigo-600">Edit</button><button onClick={() => handleDeleteCourse(course.id)} className="text-sm text-red-600">Delete</button></div></div>)}</div></div>
+            </div>}
 
-                      const relatedCourses = ongoingCourses.filter(course =>
-                        course.course_name.toLowerCase().includes(skill.skill_name.toLowerCase()) ||
-                        skill.skill_name.toLowerCase().includes(course.course_name.toLowerCase())
-                      );
+            {activeTab === 'certifications' && <div className="space-y-6">
+              <div className="rounded-xl bg-white p-6 shadow-lg"><h2 className="mb-2 text-2xl font-bold">Automatic Certificate Processing</h2><p className="mb-4 text-sm text-gray-600">Upload certificate files. Skills Pathfinder extracts fields and skills, attempts electronic verification when a supported link is available, classifies the result, and saves everything automatically.</p><form onSubmit={handleCertificateUpload} className="rounded-lg border-2 border-dashed border-indigo-300 bg-indigo-50 p-5"><input type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" onChange={(e) => setCertFiles(Array.from(e.target.files || []))} className="block w-full rounded border bg-white p-2" /><div className="mt-3 flex flex-wrap items-center gap-3"><button disabled={uploadingCert || certFiles.length === 0} className="rounded bg-indigo-600 px-5 py-2 text-white disabled:opacity-50">{uploadingCert ? 'Processing...' : `Process & Save ${certFiles.length || ''} Certificate${certFiles.length === 1 ? '' : 's'}`}</button>{certFiles.length > 0 && <button type="button" onClick={() => setCertFiles([])} className="rounded bg-gray-200 px-4 py-2">Cancel Selection</button>}</div></form></div>
 
-                      return (
-                        <div key={skill.id} className="border border-gray-200 rounded-lg p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:shadow-md transition-shadow bg-white">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              <h3 className="font-semibold text-gray-800 text-lg">{skill.skill_name}</h3>
-                              {getSkillVerificationBadge(skill)}
-                            </div>
-                            <p className="text-xs text-gray-500 mb-2">{skill.category}</p>
-                            {verifyingCerts.length > 0 && (
-                              <div className="flex flex-wrap gap-2 mb-2">
-                                {verifyingCerts.map((cert, idx) => (
-                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-50 text-yellow-800 border border-yellow-200">
-                                    🏆 {cert.certification_name}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {relatedCourses.length > 0 && (
-                              <div className="flex flex-wrap gap-2 mb-2">
-                                {relatedCourses.map((course, idx) => (
-                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-800 border border-blue-200">
-                                    📚 {course.course_name}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex gap-2 items-center">
-                            <select value={skill.proficiency_level} onChange={(e) => handleUpdateSkill(skill.id, { proficiency_level: e.target.value })} className="border border-gray-300 rounded px-2 py-1 text-sm">
-                              <option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option><option value="mastered">Mastered</option>
-                            </select>
-                            <button onClick={() => handleDeleteSkill(skill.id)} className="text-red-500 hover:text-red-700 text-sm px-2">Delete</button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h2 className="text-2xl font-bold text-gray-800 mb-6">Certifications Tracker</h2>
-                <div className="bg-indigo-50 border-2 border-dashed border-indigo-300 rounded-lg p-6 mb-6">
-                  <h3 className="font-semibold text-indigo-900 mb-4">📤 Upload Certificate for Auto-Verification</h3>
-                  <form onSubmit={handleUploadAndVerifyCert} className="flex flex-col md:flex-row gap-4">
-                    <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={handleCertFileChange} className="flex-1 border border-gray-300 rounded-lg px-3 py-2 bg-white"/>
-                    <button type="submit" disabled={uploadingCert || !certFile} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg disabled:opacity-50">
-                      {uploadingCert ? 'Processing...' : 'Upload & Extract'}
-                    </button>
-                  </form>
-                </div>
-                <form onSubmit={handleAddCert} className="bg-gray-50 p-4 rounded-lg mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <input type="text" placeholder="Certification Name" value={newCert.certification_name} onChange={(e) => setNewCert({...newCert, certification_name: e.target.value})} className="border border-gray-300 rounded-lg px-3 py-2" required />
-                  <input type="text" placeholder="Provider" value={newCert.provider} onChange={(e) => setNewCert({...newCert, provider: e.target.value})} className="border border-gray-300 rounded-lg px-3 py-2" />
-                  <input type="text" placeholder="Credential ID" value={newCert.credential_id} onChange={(e) => setNewCert({...newCert, credential_id: e.target.value})} className="border border-gray-300 rounded-lg px-3 py-2" />
-                  <input type="url" placeholder="Verification URL" value={newCert.verification_url} onChange={(e) => setNewCert({...newCert, verification_url: e.target.value})} className="border border-gray-300 rounded-lg px-3 py-2" />
-                  <button type="submit" className="md:col-span-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg">Add Certification</button>
-                </form>
-                {certifications.length === 0 ? (
-                  <p className="text-gray-500 text-center py-8">No certifications tracked yet.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {certifications.map((cert) => (
-                      <div key={cert.id} className="border border-gray-200 rounded-lg p-4 flex flex-col gap-3">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <h3 className="font-semibold text-gray-800">{cert.certification_name}</h3>
-                            <p className="text-xs text-gray-500">{cert.provider}</p>
-                            {cert.credential_id && <p className="text-xs text-gray-500">ID: {cert.credential_id}</p>}
-                          </div>
-                          {getVerificationBadge(cert)}
-                        </div>
-                        <div className="flex gap-2 items-center flex-wrap">
-                          {cert.verification_url && (
-                            <button onClick={() => handleVerifyCertificate(cert)} disabled={verifyingCert === cert.id} className={`text-sm px-3 py-1 rounded ${cert.is_verified ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}>
-                              {verifyingCert === cert.id ? 'Verifying...' : cert.is_verified ? '✓ Verified' : '🔗 Verify Now'}
-                            </button>
-                          )}
-                          <select value={cert.status} onChange={(e) => handleUpdateCert(cert.id, { status: e.target.value })} className="border border-gray-300 rounded px-2 py-1 text-sm">
-                            <option value="recommended">Recommended</option><option value="in_progress">In Progress</option><option value="completed">Completed</option>
-                          </select>
-                          <button onClick={() => handleDeleteCert(cert.id)} className="text-red-500 hover:text-red-700 text-sm">Delete</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+              <div className="rounded-xl bg-white p-6 shadow-lg"><h3 className="mb-2 text-xl font-bold">Manual Certificate Entry</h3><p className="mb-4 text-sm text-gray-600">Use this only when the certificate file is unavailable. LinkedIn, Udemy, Coursera, Credly and other supported verification links are checked electronically when possible.</p><form onSubmit={handleManualCertSave} className="grid grid-cols-1 gap-3 rounded-lg bg-gray-50 p-4 md:grid-cols-2"><input required placeholder="Certification name" value={manualCert.certification_name} onChange={(e) => setManualCert({ ...manualCert, certification_name: e.target.value })} className="rounded border px-3 py-2" /><input placeholder="Provider" value={manualCert.provider} onChange={(e) => setManualCert({ ...manualCert, provider: e.target.value })} className="rounded border px-3 py-2" /><input placeholder="Holder name" value={manualCert.holder_name} onChange={(e) => setManualCert({ ...manualCert, holder_name: e.target.value })} className="rounded border px-3 py-2" /><input placeholder="Credential ID" value={manualCert.credential_id} onChange={(e) => setManualCert({ ...manualCert, credential_id: e.target.value })} className="rounded border px-3 py-2" /><input type="url" placeholder="Verification URL" value={manualCert.verification_url} onChange={(e) => setManualCert({ ...manualCert, verification_url: e.target.value })} className="rounded border px-3 py-2 md:col-span-2" /><div className="flex gap-2 md:col-span-2"><button disabled={savingManualCert} className="rounded bg-indigo-600 px-5 py-2 text-white disabled:opacity-50">{savingManualCert ? 'Saving...' : 'Save Manual Entry'}</button><button type="button" onClick={() => setManualCert(emptyCert)} className="rounded bg-gray-200 px-4 py-2">Clear</button></div></form></div>
+
+              <div className="rounded-xl bg-white p-6 shadow-lg"><h3 className="mb-4 text-xl font-bold">Saved Certifications</h3><div className="space-y-3">{certifications.map((cert) => <div key={cert.id} className="rounded-lg border p-4"><div className="flex flex-col justify-between gap-3 md:flex-row"><div><div className="flex flex-wrap items-center gap-2"><h4 className="font-semibold">{cert.certification_name}</h4>{getVerificationBadge(cert)}</div><p className="text-sm text-gray-500">{cert.provider || 'Unknown provider'}{cert.credential_id ? ` • ID ${cert.credential_id}` : ''}</p>{cert.verification_message && <p className="mt-1 text-sm text-gray-600">{cert.verification_message}</p>}{Array.isArray(cert.extracted_skills) && cert.extracted_skills.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{cert.extracted_skills.slice(0,12).map((skill,index) => <span key={`${skill.name}-${index}`} className="rounded-full bg-purple-50 px-2 py-1 text-xs text-purple-800">{skill.name}</span>)}</div>}</div><div className="flex flex-wrap items-center gap-2">{cert.verification_url && <><a href={cert.verification_url} target="_blank" rel="noreferrer" className="rounded bg-gray-100 px-3 py-1 text-sm text-gray-700">Open Link</a><button onClick={() => handleReverifyCertificate(cert)} disabled={verifyingCert === cert.id} className="rounded bg-blue-100 px-3 py-1 text-sm text-blue-700 disabled:opacity-50">{verifyingCert === cert.id ? 'Checking...' : 'Verify Again'}</button></>}<select value={cert.status || 'completed'} onChange={(e) => handleUpdateCertStatus(cert.id, e.target.value)} className="rounded border px-2 py-1 text-sm"><option value="recommended">Recommended</option><option value="in_progress">In Progress</option><option value="completed">Completed</option></select><button onClick={() => handleDeleteCert(cert.id)} className="text-sm text-red-600">Delete</button></div></div></div>)}{certifications.length === 0 && <p className="py-6 text-center text-gray-500">No certificates saved yet.</p>}</div></div>
+            </div>}
+          </section>
         </div>
       </main>
 
-      {showReport && (
-        <CareerReport 
-          user={user} 
-          profile={profile} 
-          skills={trackedSkills} 
-          certifications={certifications} 
-          courses={ongoingCourses}
-          onClose={() => setShowReport(false)} 
-        />
-      )}
+      {showReport && <CareerReport user={user} profile={profile} skills={trackedSkills} certifications={certifications} courses={ongoingCourses} onClose={() => setShowReport(false)} />}
     </div>
   );
 };
