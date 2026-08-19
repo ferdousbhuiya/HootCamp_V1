@@ -76,13 +76,11 @@ function App() {
 
     const { data: existingSkills, error: existingError } = await supabase
       .from('skill_tracking')
-      .select('id,skill_name,source,verification_status,confidence')
+      .select('id,skill_name,source,verification_status,confidence,metadata')
       .eq('user_id', user.id);
     if (existingError) throw existingError;
 
-    const explanationMap = new Map(
-      (data.explanations || []).map((item) => [normalizeName(item.skill), item])
-    );
+    const explanationMap = new Map((data.explanations || []).map((item) => [normalizeName(item.skill), item]));
     const existingMap = new Map((existingSkills || []).map((item) => [normalizeName(item.skill_name), item]));
 
     for (const skill of incomingSkills) {
@@ -97,10 +95,7 @@ function App() {
           category: skill.category || undefined,
           confidence: Math.max(Number(current.confidence || 0), confidence),
           evidence: explanation?.evidence || undefined,
-          metadata: {
-            latest_resume_analysis_id: analysisId,
-            latest_reasoning: explanation?.reasoning || null
-          },
+          metadata: { ...(current.metadata || {}), latest_resume_analysis_id: analysisId, latest_reasoning: explanation?.reasoning || null },
           updated_at: new Date().toISOString()
         };
         Object.keys(updates).forEach((field) => updates[field] === undefined && delete updates[field]);
@@ -119,7 +114,7 @@ function App() {
           evidence: explanation?.evidence || null,
           source_record_id: analysisId,
           metadata: { reasoning: explanation?.reasoning || null }
-        }).select('id,skill_name,source,verification_status,confidence').single();
+        }).select('id,skill_name,source,verification_status,confidence,metadata').single();
         if (insertError) throw insertError;
         existingMap.set(key, inserted);
       }
@@ -153,7 +148,6 @@ function App() {
     setIsLoading(false);
 
     if (!user) return;
-
     try {
       const { data: savedAnalysis, error: saveError } = await supabase.from('resume_analyses').insert({
         user_id: user.id,
@@ -165,7 +159,6 @@ function App() {
         recommendations: data.recommendations || []
       }).select('id').single();
       if (saveError) throw saveError;
-
       await syncResumeSkills(savedAnalysis.id, data);
       await saveCareerRecommendationSnapshots(savedAnalysis.id, data.recommendations || []);
     } catch (saveError) {
@@ -193,8 +186,12 @@ function App() {
     }
   };
 
+  const handleOnboardingCancel = () => {
+    setShowOnboarding(false);
+  };
+
   if (showOnboarding && user) {
-    return <OnboardingWizard user={user} onComplete={handleOnboardingComplete} />;
+    return <OnboardingWizard user={user} onComplete={handleOnboardingComplete} onCancel={handleOnboardingCancel} />;
   }
 
   if (loading) {
