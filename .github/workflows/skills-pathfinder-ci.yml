@@ -28,9 +28,9 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r requirements.txt
       - name: Compile backend modules
-        run: python -m py_compile main.py server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py
+        run: python -m py_compile main.py server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py market_intelligence.py
       - name: Run backend unit tests
-        run: python -m unittest -v test_recommendation_engine.py test_certificate_verification.py test_extended_catalog.py
+        run: python -m unittest -v test_recommendation_engine.py test_certificate_verification.py test_extended_catalog.py test_market_intelligence.py
       - name: Import production FastAPI application
         env:
           GROQ_API_KEY: ''
@@ -45,7 +45,8 @@ jobs:
           required = {
               '/', '/health', '/api/upload', '/api/recommendations',
               '/api/verify-certificate', '/api/verify-certificate-link',
-              '/api/generate-career-advice', '/api/career-advisor'
+              '/api/generate-career-advice', '/api/career-advisor',
+              '/api/market-data'
           }
           missing = required - paths
           assert not missing, f'Missing API routes: {sorted(missing)}'
