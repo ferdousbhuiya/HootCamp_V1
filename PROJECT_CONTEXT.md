@@ -42,6 +42,11 @@ Student signup/profile → resume and certificate collection → optional certif
 - Added certificate verification tests for LinkedIn Learning, Udemy and Coursera. These hosts are accepted for electronic checking but never pre-verified.
 - Added a broad multi-field career fallback catalog covering healthcare/nursing, clinical research, public health, biology, environmental science, business, finance/accounting, HR, marketing, administration, operations, supply chain, education, history/humanities, software, cybersecurity, cloud, data/AI, networking, databases, engineering, and project management.
 - Regulated careers such as Registered Nurse and Teacher are explicitly flagged and include licensure/education pathway requirements.
+- Redesigned the public landing/auth page with a professional student-focused split layout, clearer product explanation, accessible form controls, password visibility, improved sign-up hierarchy, and an inline Skills Pathfinder brand mark.
+- Visual testing found that the first mobile design placed marketing before login. The mobile order was corrected so sign-in/sign-up is immediately visible, while the richer product overview follows below.
+- Authentication now reloads `profiles.has_completed_onboarding` after sign-in rather than assuming every returning user finished onboarding.
+- CI was strengthened to install the real backend requirements, compile modules, run unit tests, import the production `server:app`, verify critical API routes, build the frontend, serve the production preview, and capture desktop/mobile landing-page screenshots with Chromium.
+- GitHub Actions run #90 passed completely after the landing/mobile fix. Backend runtime checks and frontend visual smoke tests are green. Desktop and mobile screenshots are stored as the `skills-pathfinder-ui-screenshots` workflow artifact.
 
 ## Flow robustness rules
 - Data should be persisted as early as practical and never exist only in UI state when it is a durable finding.
