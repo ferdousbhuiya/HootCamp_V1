@@ -24,9 +24,9 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile backend modules
-        run: python -m py_compile main.py server.py recommendation_engine.py
-      - name: Run recommendation unit tests
-        run: python -m unittest -v test_recommendation_engine.py
+        run: python -m py_compile main.py server.py recommendation_engine.py certificate_verification.py
+      - name: Run backend unit tests
+        run: python -m unittest -v test_recommendation_engine.py test_certificate_verification.py
 
   frontend:
     runs-on: ubuntu-latest
