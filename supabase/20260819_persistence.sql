@@ -166,3 +166,166 @@ DROP POLICY IF EXISTS "career_findings_update_own" ON public.career_findings;
 CREATE POLICY "career_findings_update_own" ON public.career_findings FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 DROP POLICY IF EXISTS "career_findings_delete_own" ON public.career_findings;
 CREATE POLICY "career_findings_delete_own" ON public.career_findings FOR DELETE USING (auth.uid() = user_id);
+
+-- ---------------------------------------------------------------------------
+-- Certificate provenance integrity
+-- ---------------------------------------------------------------------------
+-- Skills can have several evidence sources recorded in metadata.sources. These
+-- helpers guarantee that certificate verification/deletion keeps the displayed
+-- source and verification state consistent, even when the UI changes later.
+
+CREATE OR REPLACE FUNCTION public.skill_source_rank(status_text text)
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE status_text
+    WHEN 'certificate_verified' THEN 40
+    WHEN 'ai_verified' THEN 30
+    WHEN 'certificate_extracted_unverified' THEN 20
+    WHEN 'in_progress' THEN 15
+    WHEN 'self_reported' THEN 10
+    ELSE 0
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.promote_verified_certificate_skill_sources()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  skill_row record;
+  source_item jsonb;
+  rebuilt_sources jsonb;
+  best_source jsonb;
+BEGIN
+  IF NOT NEW.is_verified OR COALESCE(OLD.is_verified, false) = true THEN
+    RETURN NEW;
+  END IF;
+
+  FOR skill_row IN
+    SELECT *
+    FROM public.skill_tracking
+    WHERE user_id = NEW.user_id
+      AND (
+        source_record_id = NEW.id
+        OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(metadata -> 'sources', '[]'::jsonb)) AS s
+          WHERE s ->> 'source_record_id' = NEW.id::text
+        )
+      )
+  LOOP
+    rebuilt_sources := '[]'::jsonb;
+
+    IF jsonb_array_length(COALESCE(skill_row.metadata -> 'sources', '[]'::jsonb)) > 0 THEN
+      SELECT COALESCE(jsonb_agg(
+        CASE
+          WHEN item ->> 'source_record_id' = NEW.id::text THEN
+            jsonb_set(
+              jsonb_set(item, '{source}', '"certificate_verified"'::jsonb, true),
+              '{verification_status}', '"certificate_verified"'::jsonb, true
+            )
+          ELSE item
+        END
+      ), '[]'::jsonb)
+      INTO rebuilt_sources
+      FROM jsonb_array_elements(skill_row.metadata -> 'sources') AS item;
+    ELSE
+      rebuilt_sources := jsonb_build_array(jsonb_build_object(
+        'source', 'certificate_verified',
+        'source_record_id', NEW.id,
+        'verification_status', 'certificate_verified',
+        'evidence', COALESCE(skill_row.evidence, 'Certificate: ' || COALESCE(NEW.certification_name, 'credential'))
+      ));
+    END IF;
+
+    SELECT item
+    INTO best_source
+    FROM jsonb_array_elements(rebuilt_sources) AS item
+    ORDER BY public.skill_source_rank(item ->> 'verification_status') DESC
+    LIMIT 1;
+
+    UPDATE public.skill_tracking
+    SET source = COALESCE((best_source ->> 'source')::public.skill_source, source),
+        verification_status = COALESCE(best_source ->> 'verification_status', verification_status),
+        source_record_id = COALESCE(NULLIF(best_source ->> 'source_record_id', '')::uuid, source_record_id),
+        evidence = COALESCE(best_source ->> 'evidence', evidence),
+        metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{sources}', rebuilt_sources, true),
+        last_seen_at = now(),
+        updated_at = now()
+    WHERE id = skill_row.id;
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_certificate_verified_skill_sources ON public.saved_certifications;
+CREATE TRIGGER trg_certificate_verified_skill_sources
+AFTER UPDATE OF is_verified ON public.saved_certifications
+FOR EACH ROW
+WHEN (NEW.is_verified = true AND OLD.is_verified IS DISTINCT FROM true)
+EXECUTE FUNCTION public.promote_verified_certificate_skill_sources();
+
+CREATE OR REPLACE FUNCTION public.remove_deleted_certificate_skill_sources()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  skill_row record;
+  remaining_sources jsonb;
+  best_source jsonb;
+BEGIN
+  FOR skill_row IN
+    SELECT *
+    FROM public.skill_tracking
+    WHERE user_id = OLD.user_id
+      AND (
+        source_record_id = OLD.id
+        OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(metadata -> 'sources', '[]'::jsonb)) AS s
+          WHERE s ->> 'source_record_id' = OLD.id::text
+        )
+      )
+  LOOP
+    SELECT COALESCE(jsonb_agg(item), '[]'::jsonb)
+    INTO remaining_sources
+    FROM jsonb_array_elements(COALESCE(skill_row.metadata -> 'sources', '[]'::jsonb)) AS item
+    WHERE item ->> 'source_record_id' IS DISTINCT FROM OLD.id::text;
+
+    IF jsonb_array_length(remaining_sources) = 0 THEN
+      DELETE FROM public.skill_tracking WHERE id = skill_row.id;
+    ELSE
+      SELECT item
+      INTO best_source
+      FROM jsonb_array_elements(remaining_sources) AS item
+      ORDER BY public.skill_source_rank(item ->> 'verification_status') DESC
+      LIMIT 1;
+
+      UPDATE public.skill_tracking
+      SET source = COALESCE((best_source ->> 'source')::public.skill_source, source),
+          verification_status = COALESCE(best_source ->> 'verification_status', verification_status),
+          source_record_id = NULLIF(best_source ->> 'source_record_id', '')::uuid,
+          evidence = best_source ->> 'evidence',
+          metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{sources}', remaining_sources, true),
+          last_seen_at = now(),
+          updated_at = now()
+      WHERE id = skill_row.id;
+    END IF;
+  END LOOP;
+
+  RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_certificate_deleted_skill_sources ON public.saved_certifications;
+CREATE TRIGGER trg_certificate_deleted_skill_sources
+AFTER DELETE ON public.saved_certifications
+FOR EACH ROW
+EXECUTE FUNCTION public.remove_deleted_certificate_skill_sources();
