@@ -37,7 +37,7 @@ Student signup/profile → resume and certificate collection → optional certif
 - Added distinct `certificate_extracted` skill provenance so an unverified certificate skill is never mislabeled as certificate-verified.
 - Ongoing courses remain manual-entry data and support add/update/cancel/delete flows.
 - Onboarding separates Close/Cancel from Finish. Closing no longer marks onboarding complete. Back/Next retains in-memory changes until the student explicitly finishes and saves.
-- Added client record keys and unique indexes in the persistence migration as groundwork for retry-safe onboarding writes.
+- Onboarding save operations now use a stable session key plus Supabase upserts for resume, certificate, course and career-recommendation records. Retrying after a partial network failure updates the same records instead of duplicating them.
 - Career advice now targets the requested 30-day, 6-month and 1-year plan instead of the old 30/60/90-day-only structure.
 - Career reports now use skills, certificates, ongoing courses and saved career matches, and persist both the final report and learning-plan snapshot in Supabase.
 - Added certificate verification tests for LinkedIn, Udemy and Coursera. These hosts are accepted for electronic checking but never pre-verified.
@@ -49,7 +49,6 @@ Student signup/profile → resume and certificate collection → optional certif
 The new frontend persistence code depends on the schema additions in `supabase/20260819_persistence.sql`. Apply that migration to the live Supabase project before merging/deploying this branch, otherwise the new columns/tables will not exist.
 
 ## Next work
-- Wire the new client-record keys into onboarding upserts so a retry after a partial network failure cannot duplicate records.
 - Add current salary/job-market lookup from authoritative sources instead of stale hard-coded market figures.
 - Improve course-to-skill extraction/alignment beyond simple course-name comparison.
 - Add saved report/learning-plan history views in the dashboard.
