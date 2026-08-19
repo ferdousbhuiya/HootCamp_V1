@@ -1,27 +1,30 @@
 """Production bootstrap for Skills Pathfinder.
 
 This keeps main.py compatible with the existing project while wiring the career
-engine explicitly and providing a Groq JSON fallback for models that reject
-Groq's strict response_format validation.
+engine explicitly, providing resilient Groq JSON handling, and replacing the
+legacy certificate route with conservative electronic verification.
 """
 
 import json
+import os
 import re
 
-from fastapi import HTTPException
+from fastapi import File, HTTPException, UploadFile
 
 import main as main_module
+from certificate_verification import (
+    SUPPORTED_CERTIFICATE_EXTENSIONS,
+    normalize_certificate_skills,
+    verify_certificate_url,
+)
 from recommendation_engine import get_career_recommendations, get_skill_gap_analysis
 
 
-# main.py currently calls these functions without importing them.  Wiring them
-# here fixes the runtime NameError without changing the existing API routes.
 main_module.get_career_recommendations = get_career_recommendations
 main_module.get_skill_gap_analysis = get_skill_gap_analysis
 
 
 def _extract_json_text(raw_text: str) -> str:
-    """Return a normalized JSON string from a model response."""
     text = (raw_text or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
@@ -44,13 +47,6 @@ def _extract_json_text(raw_text: str) -> str:
 
 
 async def resilient_llm_generate(prompt: str, max_tokens_override: int = None):
-    """Call Groq and normalize JSON without relying on response_format.
-
-    gpt-oss-20b has previously returned Groq json_validate_failed errors when
-    response_format={type: json_object} was used.  A strict JSON system prompt
-    plus local validation is more tolerant while still guaranteeing valid JSON
-    to the rest of the application.
-    """
     if not main_module.groq_client:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured.")
 
@@ -96,8 +92,129 @@ async def resilient_llm_generate(prompt: str, max_tokens_override: int = None):
         raise HTTPException(status_code=502, detail=f"Groq AI processing failed: {error_text}")
 
 
-# Functions already defined in main.py resolve this module global at request
-# time, so replacing it here updates resume, certificate, and report generation.
 main_module.llm_generate = resilient_llm_generate
+
+
+async def _extract_certificate_document(file: UploadFile):
+    filename = file.filename or "certificate"
+    extension = os.path.splitext(filename)[1].lower()
+
+    if extension not in SUPPORTED_CERTIFICATE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported certificate file. Use PDF, DOCX, TXT, PNG, JPG or JPEG.",
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Certificate file is empty.")
+    if len(file_bytes) > main_module.MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="Certificate file exceeds the 15MB limit.")
+
+    if extension == ".pdf":
+        text = main_module.extract_text_from_pdf(file_bytes)
+    elif extension == ".docx":
+        text = main_module.extract_text_from_docx(file_bytes)
+    elif extension == ".txt":
+        text = main_module.extract_text_from_txt(file_bytes)
+    else:
+        text = main_module.extract_text_from_image(file_bytes)
+
+    text = main_module.clean_extracted_text(text)
+    if len(text.strip()) < 10:
+        raise HTTPException(status_code=400, detail="Could not extract meaningful certificate text.")
+
+    return filename, extension, text
+
+
+async def verify_certificate_v2(file: UploadFile = File(...)):
+    """Extract metadata/skills and attempt electronic certificate verification."""
+    filename, extension, text = await _extract_certificate_document(file)
+
+    prompt = f"""
+Analyze this certificate or completed-course credential.
+Do not invent information. Extract only evidence supported by the document.
+
+Return ONLY JSON in this exact structure:
+{{
+  "certification_name": "",
+  "provider": "",
+  "holder_name": "",
+  "credential_id": "",
+  "verification_url": "",
+  "issue_date": "",
+  "expiration_date": "",
+  "skills": [
+    {{"name": "", "category": "", "confidence": 0.0}}
+  ]
+}}
+
+For skills, extract every meaningful skill, tool, methodology, domain competency,
+technology, or professional capability explicitly represented by the certificate.
+Do not restrict the skills to technology or engineering fields.
+
+CERTIFICATE TEXT:
+{text}
+"""
+
+    try:
+        response = await resilient_llm_generate(prompt, max_tokens_override=1400)
+        data = json.loads(response)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[CERTIFICATE] AI metadata extraction failed: {exc}")
+        data = {}
+
+    if not data.get("certification_name"):
+        data["certification_name"] = os.path.splitext(filename)[0]
+    if not data.get("provider"):
+        data["provider"] = "Unknown"
+
+    certificate_skills = normalize_certificate_skills(data.get("skills"))
+    if not certificate_skills:
+        certificate_skills = main_module.deduplicate_skills(main_module.local_skill_fallback(text))
+        for skill in certificate_skills:
+            skill["source"] = "certificate"
+
+    verification = verify_certificate_url(data)
+
+    return {
+        "filename": filename,
+        "file_type": extension,
+        "certification_name": data.get("certification_name") or "",
+        "provider": data.get("provider") or "Unknown",
+        "holder_name": data.get("holder_name") or "",
+        "credential_id": data.get("credential_id") or "",
+        "verification_url": data.get("verification_url") or "",
+        "issue_date": data.get("issue_date") or "",
+        "expiration_date": data.get("expiration_date") or "",
+        "extracted_skills": certificate_skills,
+        "skills_count": len(certificate_skills),
+        "verification_status": verification["verification_status"],
+        "verification_method": verification.get("verification_method"),
+        "verification_message": verification.get("verification_message"),
+        "verification_evidence": verification.get("verification_evidence", []),
+        "verified_url": verification.get("verified_url"),
+        "is_verified": bool(verification.get("is_verified")),
+        "auto_verified": bool(verification.get("is_verified")),
+        "character_count": len(text),
+    }
+
+
+main_module.app.router.routes = [
+    route
+    for route in main_module.app.router.routes
+    if not (
+        getattr(route, "path", None) == "/api/verify-certificate"
+        and "POST" in getattr(route, "methods", set())
+    )
+]
+main_module.app.add_api_route(
+    "/api/verify-certificate",
+    verify_certificate_v2,
+    methods=["POST"],
+    tags=["certificates"],
+)
 
 app = main_module.app
