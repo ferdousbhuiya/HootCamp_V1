@@ -7,6 +7,7 @@ import SkillDashboard from './Component/SkillDashboard';
 import CareerRecommendations from './Component/CareerRecommendations';
 import OnboardingWizard from './Component/OnboardingWizard';
 import CareerAdvisor from './Component/CareerAdvisor';
+import SavedCareerHistory from './Component/SavedCareerHistory';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -275,6 +276,7 @@ function App() {
           <SkillDashboard results={results} onBack={() => { setResults(null); setError(null); }} onRecommendations={() => setShowRecommendations(true)} />
         )}
       </UserDashboard>
+      <SavedCareerHistory user={user} />
       <CareerAdvisor user={user} />
     </>
   );
