@@ -8,6 +8,7 @@ import CareerRecommendations from './Component/CareerRecommendations';
 import OnboardingWizard from './Component/OnboardingWizard';
 import CareerAdvisor from './Component/CareerAdvisor';
 import SavedCareerHistory from './Component/SavedCareerHistory';
+import { uploadPrivateDocument } from './lib/documentStorage';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -184,12 +185,13 @@ function App() {
     if (recError) throw recError;
   };
 
-  const handleUploadSuccess = async (data) => {
+  const handleUploadSuccess = async (data, originalFile) => {
     setResults(data);
     setShowRecommendations(false);
     setError(null);
     setIsLoading(false);
     if (!user) return;
+
     try {
       const { data: savedAnalysis, error: saveError } = await supabase.from('resume_analyses').insert({
         user_id: user.id,
@@ -202,14 +204,36 @@ function App() {
         ai_failed: Boolean(data.ai_failed),
         extraction_status: data.ai_failed ? 'fallback_completed' : 'completed',
         document_type: 'resume',
-        raw_analysis: data
+        raw_analysis: data,
+        storage_bucket: 'student-resumes'
       }).select('id').single();
       if (saveError) throw saveError;
+
       await syncResumeSkills(savedAnalysis.id, data);
       await saveCareerRecommendationSnapshots(savedAnalysis.id, data.recommendations || []);
+
+      if (originalFile) {
+        try {
+          const storagePath = await uploadPrivateDocument({
+            supabase,
+            userId: user.id,
+            file: originalFile,
+            bucket: 'student-resumes'
+          });
+          const { error: storageUpdateError } = await supabase
+            .from('resume_analyses')
+            .update({ storage_bucket: 'student-resumes', storage_path: storagePath })
+            .eq('id', savedAnalysis.id);
+          if (storageUpdateError) throw storageUpdateError;
+        } catch (storageError) {
+          console.error('Resume source document storage failed:', storageError);
+          setError('Your resume analysis and findings were saved, but the original resume file could not be stored. You can continue using the analysis and retry document storage later.');
+        }
+      }
     } catch (saveError) {
       console.error('Error persisting analysis findings:', saveError);
-      setError('The analysis completed, but one or more findings could not be saved. Keep this page open and retry after checking the database migration.');
+      setError('The analysis completed, but one or more findings could not be saved. Keep this page open and retry after checking the database migrations.');
+      throw saveError;
     }
   };
 
