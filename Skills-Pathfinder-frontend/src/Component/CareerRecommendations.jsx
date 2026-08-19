@@ -8,6 +8,15 @@ const supabase = createClient(
 
 const safeArray = (value) => (Array.isArray(value) ? value : []);
 const percent = (value) => `${Math.round((Number(value) || 0) * 100)}%`;
+const normalize = (value = '') => String(value).trim().toLowerCase().replace(/[^a-z0-9+#./ -]+/g, ' ').replace(/\s+/g, ' ');
+const meaningfulPhraseMatch = (left, right) => {
+  const a = normalize(left);
+  const b = normalize(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 6) return false;
+  return a.includes(b) || b.includes(a);
+};
 
 const CareerRecommendations = ({ skills, user, onBack }) => {
   const [recommendations, setRecommendations] = useState([]);
@@ -51,7 +60,6 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
       setLoading(true);
       setError(null);
       try {
-        // Empty VITE_API_URL intentionally means same-origin in production.
         const apiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
         const response = await fetch(`${apiUrl}/api/recommendations`, {
           method: 'POST',
@@ -78,23 +86,21 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
   const bestCareer = rankedRecommendations[0];
 
   const getSkillVerificationStatus = (skillName = '') => {
-    const target = skillName.toLowerCase();
-    const skill = userSkills.find((item) => {
-      const tracked = (item.skill_name || '').toLowerCase();
-      return tracked && (tracked === target || target.includes(tracked) || tracked.includes(target));
-    });
+    const target = normalize(skillName);
+    const skill = userSkills.find((item) => normalize(item.skill_name) === target);
     if (!skill) return { status: 'not_found', badge: '' };
     if (skill.verification_status === 'certificate_verified') return { status: 'verified', badge: 'Verified' };
     if (skill.verification_status === 'in_progress') return { status: 'in_progress', badge: 'In progress' };
     if (skill.verification_status === 'ai_verified') return { status: 'ai_verified', badge: 'AI extracted' };
+    if (skill.verification_status === 'certificate_extracted_unverified') return { status: 'certificate_extracted', badge: 'Certificate extracted' };
     return { status: 'self_reported', badge: 'Tracked' };
   };
 
   const courseAlignment = (rec) => {
-    const missing = safeArray(rec?.missing_skills).map((s) => s.toLowerCase());
+    const missing = safeArray(rec?.missing_skills);
     return userCourses.filter((course) => {
-      const name = (course.course_name || '').toLowerCase();
-      return missing.some((skill) => name.includes(skill) || skill.includes(name));
+      const signals = [course.course_name, ...safeArray(course.extracted_skills).map((skill) => skill?.name || skill)].filter(Boolean);
+      return missing.some((skill) => signals.some((signal) => meaningfulPhraseMatch(skill, signal)));
     });
   };
 
@@ -132,9 +138,10 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
               <div className="mb-8 overflow-x-auto">
                 <h3 className="font-semibold text-gray-800 mb-3">Career comparison</h3>
                 <table className="min-w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
-                  <thead className="bg-gray-50"><tr><th className="text-left p-3">Career</th><th className="text-left p-3">Match</th><th className="text-left p-3">Salary</th><th className="text-left p-3">Skill gaps</th></tr></thead>
+                  <thead className="bg-gray-50"><tr><th className="text-left p-3">Career</th><th className="text-left p-3">Match</th><th className="text-left p-3">Salary reference</th><th className="text-left p-3">Skill gaps</th></tr></thead>
                   <tbody>{rankedRecommendations.slice(0, 5).map((rec) => <tr key={rec.id} className="border-t"><td className="p-3 font-medium">{rec.path}</td><td className="p-3">{percent(rec.match_score)}</td><td className="p-3">{rec.median_salary || 'Not available'}</td><td className="p-3">{safeArray(rec.missing_skills).length}</td></tr>)}</tbody>
                 </table>
+                <p className="mt-2 text-xs text-gray-400">Salary figures in the career catalog are reference values. Live market validation will be stored separately when current market data is available.</p>
               </div>
             )}
 
@@ -154,8 +161,8 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
                       <div className="mt-4 h-2 bg-gray-200 rounded-full"><div className="h-2 rounded-full bg-indigo-600" style={{ width: percent(rec.match_score) }}/></div>
 
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 my-5">
-                        <div className="p-3 rounded-lg border bg-white"><p className="text-xs text-gray-500">Job outlook</p><p className="font-semibold">{rec.job_outlook || 'Not available'}</p></div>
-                        <div className="p-3 rounded-lg border bg-white"><p className="text-xs text-gray-500">Median salary</p><p className="font-semibold">{rec.median_salary || 'Not available'}</p></div>
+                        <div className="p-3 rounded-lg border bg-white"><p className="text-xs text-gray-500">Job outlook reference</p><p className="font-semibold">{rec.job_outlook || 'Not available'}</p></div>
+                        <div className="p-3 rounded-lg border bg-white"><p className="text-xs text-gray-500">Salary reference</p><p className="font-semibold">{rec.median_salary || 'Not available'}</p></div>
                         <div className="p-3 rounded-lg border bg-white"><p className="text-xs text-gray-500">Top locations</p><p className="font-semibold text-sm">{safeArray(rec.top_locations).slice(0, 3).join(', ') || 'Not available'}</p></div>
                       </div>
 
@@ -164,7 +171,7 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
                         <div><h4 className="font-semibold text-amber-700 mb-2">Skills to develop</h4><div className="flex flex-wrap gap-2">{missing.map((skill) => <span key={skill} className="px-3 py-1 rounded-full text-sm bg-amber-100 text-amber-800 border border-amber-200">{skill}</span>)}</div></div>
                       </div>
 
-                      {alignedCourses.length > 0 && <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-800"><strong>Course-path alignment:</strong> {alignedCourses.map((c) => c.course_name).join(', ')} may already be helping close this career's skill gaps.</div>}
+                      {alignedCourses.length > 0 && <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-800"><strong>Course-path alignment:</strong> {alignedCourses.map((c) => c.course_name).join(', ')} already overlaps one or more current skill gaps. Keep the course in progress before adding a duplicate beginner recommendation.</div>}
 
                       <button onClick={() => { setSelectedCareer(selectedCareer?.id === rec.id ? null : rec); setActiveTab('overview'); }} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg mt-5">{selectedCareer?.id === rec.id ? 'Hide Details' : 'View Career Details & Roadmap'}</button>
                     </div>
