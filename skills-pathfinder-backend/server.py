@@ -1,17 +1,20 @@
 """Production bootstrap for Skills Pathfinder.
 
-This keeps main.py compatible with the existing project while wiring the career
-engine explicitly, providing resilient Groq JSON handling, loading the broader
-career catalog, and replacing the legacy certificate route with conservative
-electronic verification.
+This module extends the original FastAPI application with:
+- resilient Groq JSON handling;
+- the expanded career catalog;
+- conservative certificate verification;
+- safe verification-link rechecks; and
+- structured career-development plans.
 """
 
 import json
 import os
 import re
+from typing import Any, Dict, List
 
 from fastapi import File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import main as main_module
 import recommendation_engine as recommendation_module
@@ -137,7 +140,6 @@ async def _extract_certificate_document(file: UploadFile):
 
 
 async def verify_certificate_v2(file: UploadFile = File(...)):
-    """Extract metadata/skills and attempt electronic certificate verification."""
     filename, extension, text = await _extract_certificate_document(file)
 
     prompt = f"""
@@ -220,11 +222,6 @@ class CertificateLinkRequest(BaseModel):
 
 
 async def verify_certificate_link(request: CertificateLinkRequest):
-    """Re-check a saved or manually entered certificate verification URL.
-
-    This never marks a credential verified merely because the URL is from a
-    recognized provider. The provider page must contain matching evidence.
-    """
     certificate = request.model_dump()
     result = verify_certificate_url(certificate)
     return {
@@ -239,14 +236,107 @@ async def verify_certificate_link(request: CertificateLinkRequest):
     }
 
 
-main_module.app.router.routes = [
-    route
-    for route in main_module.app.router.routes
-    if not (
-        getattr(route, "path", None) == "/api/verify-certificate"
-        and "POST" in getattr(route, "methods", set())
-    )
-]
+class CareerAdviceRequest(BaseModel):
+    skills: List[str] = Field(default_factory=list)
+    certifications: List[Dict[str, Any]] = Field(default_factory=list)
+    courses: List[Dict[str, Any]] = Field(default_factory=list)
+    career_recommendations: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+async def generate_career_advice_v2(request: CareerAdviceRequest):
+    """Generate a practical 30-day, 6-month and 1-year student plan."""
+    compact_certs = [
+        {
+            "name": item.get("certification_name"),
+            "provider": item.get("provider"),
+            "verified": item.get("is_verified"),
+            "status": item.get("verification_status"),
+        }
+        for item in request.certifications[:20]
+    ]
+    compact_courses = [
+        {
+            "name": item.get("course_name"),
+            "provider": item.get("provider"),
+            "status": item.get("status"),
+            "completion": item.get("expected_completion_date"),
+        }
+        for item in request.courses[:20]
+    ]
+    compact_careers = [
+        {
+            "title": item.get("path") or item.get("career_title"),
+            "match": item.get("match_percentage") or item.get("match_score"),
+            "missing_skills": item.get("missing_skills", []),
+        }
+        for item in request.career_recommendations[:5]
+    ]
+
+    prompt = f"""
+Create a student career-development report from the structured profile below.
+Do not assume licenses, degrees, or certifications that are not present.
+If a target career is regulated, clearly separate current skills from licensing/education requirements.
+Avoid recommending a beginner course when the student is already taking an equivalent ongoing course.
+
+Skills: {json.dumps(request.skills[:100])}
+Certificates: {json.dumps(compact_certs)}
+Ongoing courses: {json.dumps(compact_courses)}
+Career matches: {json.dumps(compact_careers)}
+
+Return ONLY JSON:
+{{
+  "executive_summary": "",
+  "swot_analysis": {{
+    "strengths": [],
+    "weaknesses": [],
+    "opportunities": [],
+    "threats": []
+  }},
+  "career_readiness": {{
+    "current_level": "",
+    "strongest_path": "",
+    "alternative_paths": [],
+    "major_constraints": []
+  }},
+  "action_plan": {{
+    "30_days": [""],
+    "6_months": [""],
+    "1_year": [""]
+  }},
+  "recommended_next_skills": [],
+  "recommended_certifications": [],
+  "recommended_projects": [],
+  "ongoing_course_alignment": [
+    {{"course": "", "career_or_skill": "", "alignment": ""}}
+  ],
+  "application_readiness": {{
+    "can_apply_now": [],
+    "prepare_before_applying": [],
+    "regulated_roles_note": ""
+  }}
+}}
+
+Be practical, specific, and concise.
+"""
+
+    response = await resilient_llm_generate(prompt, max_tokens_override=2200)
+    return {"status": "success", "advice": json.loads(response)}
+
+
+def _remove_post_route(path: str):
+    main_module.app.router.routes = [
+        route
+        for route in main_module.app.router.routes
+        if not (
+            getattr(route, "path", None) == path
+            and "POST" in getattr(route, "methods", set())
+        )
+    ]
+
+
+_remove_post_route("/api/verify-certificate")
+_remove_post_route("/api/generate-career-advice")
+
 main_module.app.add_api_route(
     "/api/verify-certificate",
     verify_certificate_v2,
@@ -258,6 +348,12 @@ main_module.app.add_api_route(
     verify_certificate_link,
     methods=["POST"],
     tags=["certificates"],
+)
+main_module.app.add_api_route(
+    "/api/generate-career-advice",
+    generate_career_advice_v2,
+    methods=["POST"],
+    tags=["career"],
 )
 
 app = main_module.app
