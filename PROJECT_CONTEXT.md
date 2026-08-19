@@ -23,11 +23,19 @@ Student signup/profile → resume and certificate collection → optional certif
 - Added `server.py` production bootstrap to wire recommendation functions into the existing FastAPI app and provide resilient Groq JSON parsing for `openai/gpt-oss-20b`.
 - Backend Dockerfile now starts `server:app`.
 - Added backend recommendation unit tests.
-- Added GitHub Actions CI for backend compile/tests and frontend production build.
-- Backend CI passed.
-- Frontend dependency install and production build passed.
+- Added GitHub Actions CI for backend compile/tests and frontend production build; backend and frontend builds passed.
+- Added automatic certificate pipeline for PDF, DOCX, TXT, PNG, JPG, and JPEG.
+- Certificate processing now extracts certificate name, provider, holder, credential ID, verification URL, dates, and certificate-derived skills.
+- Electronic verification is conservative: a trusted-domain URL alone is NOT enough. The provider page must be reached and contain matching credential evidence before `electronically_verified` is returned.
+- Added distinct certificate statuses for no link, unknown provider/manual review, invalid link, unavailable verification page, provider page reached but unconfirmed, and electronically verified.
+- Onboarding now accepts multiple certificates, displays verification classifications, merges certificate skills with resume skills, and preserves verification state in Supabase.
+- Added certificate verification unit tests.
+- Added a broad multi-field career fallback catalog covering healthcare/nursing, clinical research, public health, biology, environmental science, business, finance/accounting, HR, marketing, administration, operations, supply chain, education, history/humanities, software, cybersecurity, cloud, data/AI, networking, databases, engineering, and project management.
+- Regulated careers such as Registered Nurse and Teacher are explicitly flagged and include licensure/education pathway requirements.
 
 ## Next work
-- Expand the career intelligence layer beyond the initial eight careers.
-- Synchronize resume/certificate/course-derived skills into the unified Supabase skill profile.
-- Build learning-path and 30-day/6-month/1-year reporting.
+- Harmonize the UserDashboard certificate-management flow with the new automatic verification endpoint so no UI can self-mark a certificate verified from a URL alone.
+- Add current salary/job-market lookup from authoritative sources instead of stale hard-coded market figures.
+- Synchronize resume/certificate/course-derived skills more deeply into the unified Supabase skill profile and deduplicate across repeated sessions.
+- Build learning-path recommendations and 30-day/6-month/1-year reporting.
+- Expand final profile-aware AI career advisor.
