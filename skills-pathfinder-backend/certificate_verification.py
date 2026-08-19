@@ -1,18 +1,14 @@
 """Certificate extraction and verification helpers for Skills Pathfinder.
 
-The verification pipeline is intentionally conservative:
-- documents can be PDF, DOCX, TXT, PNG, JPG, or JPEG;
-- AI extracts certificate metadata and skills;
-- a verification URL is fetched automatically only for trusted credential hosts;
-- a certificate is marked electronically verified only when the fetched page
-  contains supporting evidence such as credential ID, certificate name, or
-  holder name;
-- unknown/unreachable links are classified without falsely claiming verified.
+Verification is deliberately conservative. A provider URL is only a candidate
+for electronic verification; `electronically_verified` is returned only after
+the provider page is reached and matching credential evidence is visible.
 """
 
 from __future__ import annotations
 
 import html
+import ipaddress
 import re
 import socket
 import urllib.error
@@ -27,6 +23,7 @@ TRUSTED_VERIFICATION_HOST_SUFFIXES = (
     "accredible.com",
     "coursera.org",
     "udemy.com",
+    "ude.my",
     "linkedin.com",
     "edx.org",
     "microsoft.com",
@@ -41,6 +38,30 @@ TRUSTED_VERIFICATION_HOST_SUFFIXES = (
     "badgr.com",
     "openbadgepassport.com",
 )
+
+# Provider-specific link shapes help us distinguish likely credential links
+# from arbitrary pages on a trusted provider domain. Patterns are intentionally
+# permissive enough to tolerate provider URL changes, while page evidence is
+# still required before verification succeeds.
+PROVIDER_LINK_PATTERNS = {
+    "coursera": (
+        r"^https://(?:www\.)?coursera\.org/account/accomplishments/(?:verify|certificate)/[^?#]+",
+        r"^https://(?:www\.)?coursera\.org/verify/[^?#]+",
+    ),
+    "udemy": (
+        r"^https://(?:www\.)?udemy\.com/certificate/[^?#]+",
+        r"^https://ude\.my/[^?#]+",
+    ),
+    "linkedin_learning": (
+        r"^https://(?:www\.)?linkedin\.com/learning/certificates/[^?#]+",
+        r"^https://(?:www\.)?linkedin\.com/learning/.+",
+    ),
+    "credly": (r"^https://(?:www\.)?credly\.com/(?:badges|earner)/.+",),
+    "accredible": (
+        r"^https://(?:www\.)?credential\.net/.+",
+        r"^https://(?:www\.)?accredible\.com/.+",
+    ),
+}
 
 SUPPORTED_CERTIFICATE_EXTENSIONS = {
     ".pdf",
@@ -64,32 +85,61 @@ def _host_is_trusted(hostname: str) -> bool:
     return any(host == suffix or host.endswith("." + suffix) for suffix in TRUSTED_VERIFICATION_HOST_SUFFIXES)
 
 
+def _ip_is_public(value: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
 def _looks_like_public_hostname(hostname: str) -> bool:
-    """Reject obviously local/private hosts before any outbound request."""
-    host = (hostname or "").strip().lower()
+    """Reject local/private/rebinding targets before outbound verification."""
+    host = (hostname or "").strip().lower().rstrip(".")
     if not host or host in {"localhost", "localhost.localdomain"}:
         return False
-    if host.endswith(".local") or host.endswith(".internal"):
+    if host.endswith((".local", ".internal", ".localhost")):
         return False
 
+    # Literal IP addresses must be globally routable.
     try:
-        ip = socket.inet_pton(socket.AF_INET, host)
-        if ip:
-            first = int(host.split(".")[0])
-            if first in {10, 127}:
-                return False
-            if first == 169 and host.startswith("169.254."):
-                return False
-            if first == 192 and host.startswith("192.168."):
-                return False
-            if first == 172:
-                second = int(host.split(".")[1])
-                if 16 <= second <= 31:
-                    return False
-    except OSError:
+        ipaddress.ip_address(host)
+        return _ip_is_public(host)
+    except ValueError:
         pass
 
-    return True
+    # Resolve the hostname and reject it if any answer targets a non-public IP.
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
+    except OSError:
+        # DNS failure will be classified as unavailable during the actual fetch.
+        return True
+    return bool(addresses) and all(_ip_is_public(address) for address in addresses)
+
+
+def identify_verification_provider(url: str) -> str:
+    normalized = (url or "").strip().lower()
+    for provider, patterns in PROVIDER_LINK_PATTERNS.items():
+        if any(re.match(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns):
+            return provider
+
+    host = urllib.parse.urlparse(normalized).hostname or ""
+    if host == "ude.my" or host.endswith(".udemy.com") or host == "udemy.com":
+        return "udemy"
+    if host == "coursera.org" or host.endswith(".coursera.org"):
+        return "coursera"
+    if host == "linkedin.com" or host.endswith(".linkedin.com"):
+        return "linkedin_learning"
+    if host == "credly.com" or host.endswith(".credly.com"):
+        return "credly"
+    return "trusted_provider" if _host_is_trusted(host) else "unknown"
 
 
 def classify_verification_url(url: str) -> Dict[str, Any]:
@@ -101,6 +151,7 @@ def classify_verification_url(url: str) -> Dict[str, Any]:
             "verification_status": "no_verification_link",
             "is_verified": False,
             "verification_method": "none",
+            "verification_provider": None,
             "verification_message": "No verification link was found in the certificate.",
         }
 
@@ -109,6 +160,7 @@ def classify_verification_url(url: str) -> Dict[str, Any]:
             "verification_status": "verification_link_invalid",
             "is_verified": False,
             "verification_method": "url_validation",
+            "verification_provider": identify_verification_provider(url),
             "verification_message": "A verification link was found, but it is not a safe public HTTPS verification URL.",
         }
 
@@ -117,14 +169,17 @@ def classify_verification_url(url: str) -> Dict[str, Any]:
             "verification_status": "verification_link_found_unconfirmed",
             "is_verified": False,
             "verification_method": "manual_review",
+            "verification_provider": "unknown",
             "verification_message": "A verification link was found, but its provider is not yet in the trusted automatic-verification list.",
         }
 
+    provider = identify_verification_provider(url)
     return {
         "verification_status": "verification_pending",
         "is_verified": False,
         "verification_method": "electronic",
-        "verification_message": "Trusted verification link found. Electronic verification is being attempted.",
+        "verification_provider": provider,
+        "verification_message": f"Trusted {provider.replace('_', ' ')} verification link found. Electronic verification is being attempted.",
     }
 
 
@@ -160,7 +215,7 @@ def verify_certificate_url(certificate: Dict[str, Any]) -> Dict[str, Any]:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "SkillsPathfinder/1.0 (+certificate-verification)",
+            "User-Agent": "Mozilla/5.0 SkillsPathfinder/1.0 CertificateVerification",
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         },
         method="GET",
@@ -171,12 +226,13 @@ def verify_certificate_url(certificate: Dict[str, Any]) -> Dict[str, Any]:
             final_url = response.geturl()
             final_host = urllib.parse.urlparse(final_url).hostname or ""
 
-            if not _host_is_trusted(final_host):
+            if not _host_is_trusted(final_host) or not _looks_like_public_hostname(final_host):
                 return {
                     "verification_status": "verification_redirect_untrusted",
                     "is_verified": False,
                     "verification_method": "electronic",
-                    "verification_message": "The trusted verification link redirected to an untrusted host, so verification was not accepted.",
+                    "verification_provider": initial.get("verification_provider"),
+                    "verification_message": "The trusted verification link redirected to an untrusted or non-public host, so verification was not accepted.",
                 }
 
             raw = response.read(MAX_VERIFY_RESPONSE_BYTES + 1)
@@ -194,11 +250,14 @@ def verify_certificate_url(certificate: Dict[str, Any]) -> Dict[str, Any]:
             name_match = bool(cert_name and cert_name in page_text)
             holder_match = bool(holder_name and holder_name in page_text)
 
+            # Strong proof: exact credential/reference ID. Otherwise require both
+            # certificate title and learner name to avoid false positives.
             if credential_match or (name_match and holder_match):
                 return {
                     "verification_status": "electronically_verified",
                     "is_verified": True,
                     "verification_method": "electronic",
+                    "verification_provider": initial.get("verification_provider"),
                     "verification_message": "The provider verification page was reached and contained matching certificate evidence.",
                     "verification_evidence": evidence,
                     "verified_url": final_url,
@@ -208,6 +267,7 @@ def verify_certificate_url(certificate: Dict[str, Any]) -> Dict[str, Any]:
                 "verification_status": "verification_page_reached_unconfirmed",
                 "is_verified": False,
                 "verification_method": "electronic",
+                "verification_provider": initial.get("verification_provider"),
                 "verification_message": "The provider verification page was reached, but enough matching evidence was not visible to verify automatically.",
                 "verification_evidence": evidence,
                 "verified_url": final_url,
@@ -218,6 +278,7 @@ def verify_certificate_url(certificate: Dict[str, Any]) -> Dict[str, Any]:
             "verification_status": "verification_unavailable",
             "is_verified": False,
             "verification_method": "electronic",
+            "verification_provider": initial.get("verification_provider"),
             "verification_message": f"The provider verification page could not be confirmed automatically (HTTP {exc.code}).",
         }
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -225,6 +286,7 @@ def verify_certificate_url(certificate: Dict[str, Any]) -> Dict[str, Any]:
             "verification_status": "verification_unavailable",
             "is_verified": False,
             "verification_method": "electronic",
+            "verification_provider": initial.get("verification_provider"),
             "verification_message": f"Automatic verification could not reach the provider page: {exc}",
         }
 
@@ -255,6 +317,7 @@ def normalize_certificate_skills(skills: Any) -> List[Dict[str, Any]]:
             "category": item.get("category") or "Certification Skill",
             "confidence": max(0.0, min(confidence, 1.0)),
             "source": "certificate",
+            "evidence": item.get("evidence") or item.get("reasoning") or "Extracted from certificate",
         }
         key = name.lower()
         if key not in unique or normalized["confidence"] > unique[key]["confidence"]:
