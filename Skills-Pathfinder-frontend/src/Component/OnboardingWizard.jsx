@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { deletePrivateDocument, uploadPrivateDocument } from '../lib/documentStorage';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -264,6 +265,16 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
 
   const persistResume = async (data, file) => {
     const resumeKey = `${sessionKey}:resume`;
+    let storagePath = null;
+    let storageWarning = null;
+    if (file) {
+      try {
+        storagePath = await uploadPrivateDocument({ supabase, userId: user.id, file, bucket: 'student-resumes' });
+      } catch (storageError) {
+        console.error('Onboarding resume source storage failed:', storageError);
+        storageWarning = 'Resume analysis was saved, but the original file could not be stored.';
+      }
+    }
     const { data: analysis, error: analysisError } = await supabase.from('resume_analyses').upsert({
       user_id: user.id,
       client_record_key: resumeKey,
@@ -276,7 +287,9 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
       ai_failed: Boolean(data.ai_failed),
       extraction_status: data.ai_failed ? 'fallback_completed' : 'completed',
       document_type: 'resume',
-      raw_analysis: data
+      raw_analysis: data,
+      storage_bucket: 'student-resumes',
+      storage_path: storagePath
     }, { onConflict: 'user_id,client_record_key' }).select('id').single();
     if (analysisError) throw analysisError;
 
@@ -291,11 +304,21 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
       }, analysis.id);
     }
     await saveRecommendationSnapshots(analysis.id, data.recommendations || []);
-    return { ...data, saved_analysis_id: analysis.id, client_record_key: resumeKey };
+    return { ...data, saved_analysis_id: analysis.id, client_record_key: resumeKey, storage_path: storagePath, storage_warning: storageWarning };
   };
 
-  const persistCertificate = async (cert, itemKey) => {
+  const persistCertificate = async (cert, itemKey, file = null) => {
     const certKey = `${sessionKey}:cert:${itemKey}`;
+    let storagePath = cert.storage_path || null;
+    let storageWarning = null;
+    if (file) {
+      try {
+        storagePath = await uploadPrivateDocument({ supabase, userId: user.id, file, bucket: 'student-certificates' });
+      } catch (storageError) {
+        console.error('Onboarding certificate source storage failed:', storageError);
+        storageWarning = 'Certificate findings were saved, but the original file could not be stored.';
+      }
+    }
     const { data: saved, error: certError } = await supabase.from('saved_certifications').upsert({
       user_id: user.id,
       client_record_key: certKey,
@@ -305,6 +328,8 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
       credential_id: cert.credential_id || null,
       verification_url: cert.verification_url || null,
       certificate_file_url: null,
+      storage_bucket: 'student-certificates',
+      storage_path: storagePath,
       is_verified: Boolean(cert.is_verified),
       verified_at: cert.is_verified ? new Date().toISOString() : null,
       verification_status: cert.verification_status || 'no_verification_link',
@@ -330,7 +355,7 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
         evidence: `Certificate: ${cert.certification_name}`
       }, saved.id);
     }
-    return { ...cert, saved_id: saved.id, item_key: itemKey, client_record_key: certKey };
+    return { ...cert, saved_id: saved.id, item_key: itemKey, client_record_key: certKey, storage_bucket: 'student-certificates', storage_path: storagePath, storage_warning: storageWarning };
   };
 
   const persistCourse = async (course) => {
@@ -382,7 +407,7 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
       try {
         const data = await postDocument('/api/verify-certificate', file);
         const itemKey = createItemKey('cert');
-        const saved = await persistCertificate({ ...data, original_filename: file.name }, itemKey);
+        const saved = await persistCertificate({ ...data, original_filename: file.name }, itemKey, file);
         processed.push(saved);
       } catch (err) {
         failures.push(`${file.name}: ${err.message}`);
@@ -435,6 +460,13 @@ const OnboardingWizard = ({ user, onComplete, onCancel }) => {
         await removeSkillSource(cert.saved_id);
         const { error } = await supabase.from('saved_certifications').delete().eq('id', cert.saved_id).eq('user_id', user.id);
         if (error) throw error;
+        if (cert.storage_path) {
+          try {
+            await deletePrivateDocument({ supabase, bucket: cert.storage_bucket || 'student-certificates', path: cert.storage_path });
+          } catch (storageError) {
+            console.error('Certificate storage cleanup failed:', storageError);
+          }
+        }
       }
       const nextCertificates = certificates.filter((_, itemIndex) => itemIndex !== index);
       setCertificates(nextCertificates);

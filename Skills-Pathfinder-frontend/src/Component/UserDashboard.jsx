@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import CareerReport from './CareerReport';
+import { deletePrivateDocument, uploadPrivateDocument } from '../lib/documentStorage';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -307,7 +308,17 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
     }
   };
 
-  const persistCertificate = async (result, rawExtraction = result) => {
+  const persistCertificate = async (result, rawExtraction = result, file = null) => {
+    let storagePath = null;
+    let storageWarning = null;
+    if (file) {
+      try {
+        storagePath = await uploadPrivateDocument({ supabase, userId: user.id, file, bucket: 'student-certificates' });
+      } catch (storageError) {
+        console.error('Certificate source document storage failed:', storageError);
+        storageWarning = 'Certificate findings were saved, but the original certificate file could not be stored.';
+      }
+    }
     const row = {
       user_id: user.id,
       certification_name: result.certification_name || 'Unknown certificate',
@@ -315,6 +326,9 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
       holder_name: result.holder_name || null,
       credential_id: result.credential_id || null,
       verification_url: result.verification_url || null,
+      certificate_file_url: null,
+      storage_bucket: 'student-certificates',
+      storage_path: storagePath,
       is_verified: Boolean(result.is_verified),
       verified_at: result.is_verified ? new Date().toISOString() : null,
       verification_status: result.verification_status || 'no_verification_link',
@@ -334,7 +348,7 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
     const { data: saved, error } = await supabase.from('saved_certifications').insert(row).select().single();
     if (error) throw error;
     await persistCertificateSkills(saved, result.extracted_skills || []);
-    return saved;
+    return { ...saved, storage_warning: storageWarning };
   };
 
   const handleCertificateUpload = async (e) => {
@@ -355,7 +369,7 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
           throw new Error(body.detail || `Certificate processing returned ${response.status}`);
         }
         const result = await response.json();
-        savedRows.push(await persistCertificate(result));
+        savedRows.push(await persistCertificate(result, result, file));
       } catch (error) {
         failures.push(`${file.name}: ${error.message}`);
       }
@@ -447,9 +461,20 @@ const UserDashboard = ({ user, onLogout, onViewAnalysis, onStartOnboarding, chil
 
   const handleDeleteCert = async (id) => {
     if (!window.confirm('Delete this certificate record? Skills learned from other sources will remain.')) return;
+    const certificate = certifications.find((cert) => cert.id === id);
     const { error } = await supabase.from('saved_certifications').delete().eq('id', id);
     if (error) return showMessage(`Certificate could not be deleted: ${error.message}`, 'error');
     setCertifications((current) => current.filter((cert) => cert.id !== id));
+    if (certificate?.storage_path) {
+      try {
+        await deletePrivateDocument({ supabase, bucket: certificate.storage_bucket || 'student-certificates', path: certificate.storage_path });
+      } catch (storageError) {
+        console.error('Certificate storage cleanup failed:', storageError);
+        showMessage('Certificate record deleted, but its private source file could not be removed. Please retry storage cleanup later.', 'error');
+        return;
+      }
+    }
+    showMessage('Certificate deleted.');
   };
 
   const getVerificationBadge = (cert) => {
