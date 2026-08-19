@@ -3,11 +3,8 @@
 -- This migration preserves every important derived result so it can be
 -- retrieved later for dashboards, reports, career advice, and auditing.
 
--- 0) Expand skill provenance so extracted-but-unverified certificate skills
--- are not mislabeled as self-reported or certificate-verified.
 ALTER TYPE public.skill_source ADD VALUE IF NOT EXISTS 'certificate_extracted';
 
--- 1) Rich certificate evidence and extracted-skill persistence.
 ALTER TABLE public.saved_certifications
   ADD COLUMN IF NOT EXISTS holder_name text,
   ADD COLUMN IF NOT EXISTS issued_at date,
@@ -21,18 +18,15 @@ ALTER TABLE public.saved_certifications
   ADD COLUMN IF NOT EXISTS client_record_key text,
   ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
--- 2) Skill provenance and evidence.
 ALTER TABLE public.skill_tracking
   ADD COLUMN IF NOT EXISTS confidence numeric,
   ADD COLUMN IF NOT EXISTS evidence text,
   ADD COLUMN IF NOT EXISTS source_record_id uuid,
   ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
 
--- 2b) Idempotency keys for retry-safe onboarding writes.
 ALTER TABLE public.resume_analyses ADD COLUMN IF NOT EXISTS client_record_key text;
 ALTER TABLE public.ongoing_courses ADD COLUMN IF NOT EXISTS client_record_key text;
 
--- 3) Persist career recommendation snapshots independent of a resume upload.
 CREATE TABLE IF NOT EXISTS public.career_recommendations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
@@ -51,7 +45,6 @@ CREATE TABLE IF NOT EXISTS public.career_recommendations (
   created_at timestamptz DEFAULT now()
 );
 
--- 4) Persist generated learning plans so returning students see the same plan.
 CREATE TABLE IF NOT EXISTS public.learning_plans (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
@@ -70,7 +63,6 @@ CREATE TABLE IF NOT EXISTS public.learning_plans (
   updated_at timestamptz DEFAULT now()
 );
 
--- 5) Persist final reports and AI findings.
 CREATE TABLE IF NOT EXISTS public.career_reports (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
@@ -87,10 +79,12 @@ CREATE TABLE IF NOT EXISTS public.career_reports (
 CREATE INDEX IF NOT EXISTS idx_career_recommendations_user_id ON public.career_recommendations(user_id);
 CREATE INDEX IF NOT EXISTS idx_learning_plans_user_id ON public.learning_plans(user_id);
 CREATE INDEX IF NOT EXISTS idx_career_reports_user_id ON public.career_reports(user_id);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_resume_client_record ON public.resume_analyses(user_id, client_record_key) WHERE client_record_key IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_cert_client_record ON public.saved_certifications(user_id, client_record_key) WHERE client_record_key IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_course_client_record ON public.ongoing_courses(user_id, client_record_key) WHERE client_record_key IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_career_rec_client_record ON public.career_recommendations(user_id, client_record_key) WHERE client_record_key IS NOT NULL;
+-- PostgreSQL unique indexes allow multiple NULL values, so these can be used
+-- directly by Supabase upsert(onConflict: 'user_id,client_record_key').
+CREATE UNIQUE INDEX IF NOT EXISTS uq_resume_client_record ON public.resume_analyses(user_id, client_record_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cert_client_record ON public.saved_certifications(user_id, client_record_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_course_client_record ON public.ongoing_courses(user_id, client_record_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_career_rec_client_record ON public.career_recommendations(user_id, client_record_key);
 
 ALTER TABLE public.career_recommendations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.learning_plans ENABLE ROW LEVEL SECURITY;
