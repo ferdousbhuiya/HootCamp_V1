@@ -1,8 +1,9 @@
 """Production bootstrap for Skills Pathfinder.
 
 This keeps main.py compatible with the existing project while wiring the career
-engine explicitly, providing resilient Groq JSON handling, and replacing the
-legacy certificate route with conservative electronic verification.
+engine explicitly, providing resilient Groq JSON handling, loading the broader
+career catalog, and replacing the legacy certificate route with conservative
+electronic verification.
 """
 
 import json
@@ -12,6 +13,8 @@ import re
 from fastapi import File, HTTPException, UploadFile
 
 import main as main_module
+import recommendation_engine as recommendation_module
+from career_catalog_extended import EXTENDED_CAREER_PATHS
 from certificate_verification import (
     SUPPORTED_CERTIFICATE_EXTENSIONS,
     normalize_certificate_skills,
@@ -19,6 +22,12 @@ from certificate_verification import (
 )
 from recommendation_engine import get_career_recommendations, get_skill_gap_analysis
 
+
+# Expand the original proof-of-concept career list without creating duplicates.
+_existing_career_ids = {career.get("id") for career in recommendation_module.CAREER_PATHS}
+recommendation_module.CAREER_PATHS.extend(
+    career for career in EXTENDED_CAREER_PATHS if career.get("id") not in _existing_career_ids
+)
 
 main_module.get_career_recommendations = get_career_recommendations
 main_module.get_skill_gap_analysis = get_skill_gap_analysis
