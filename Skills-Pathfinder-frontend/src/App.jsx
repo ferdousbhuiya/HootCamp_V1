@@ -36,21 +36,31 @@ function App() {
   };
 
   useEffect(() => {
+    let active = true;
+
     const checkSession = async () => {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) console.error('Session check failed:', sessionError);
+      if (!active) return;
+
       setUser(session?.user || null);
 
       if (session?.user) {
         try {
           const completed = await readOnboardingState(session.user.id);
+          if (!active) return;
           setHasCompletedOnboarding(completed);
+          setShowOnboarding(!completed);
         } catch (profileError) {
           console.error('Profile onboarding check failed:', profileError);
+          if (!active) return;
           setHasCompletedOnboarding(false);
+          setShowOnboarding(false);
+          setError('Your account is signed in, but onboarding status could not be restored. You can reopen onboarding from the dashboard.');
         }
       }
-      setLoading(false);
+
+      if (active) setLoading(false);
     };
 
     checkSession();
@@ -61,9 +71,14 @@ function App() {
         setShowRecommendations(false);
         setShowOnboarding(false);
         setHasCompletedOnboarding(false);
+        setError(null);
       }
     });
-    return () => subscription.unsubscribe();
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const handleAuthSuccess = async (authenticatedUser, isNewUser = false) => {
@@ -123,6 +138,7 @@ function App() {
           confidence: Math.max(Number(current.confidence || 0), confidence),
           evidence: explanation?.evidence || undefined,
           metadata: { ...(current.metadata || {}), latest_resume_analysis_id: analysisId, latest_reasoning: explanation?.reasoning || null },
+          last_seen_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         };
         Object.keys(updates).forEach((field) => updates[field] === undefined && delete updates[field]);
@@ -140,7 +156,16 @@ function App() {
           confidence,
           evidence: explanation?.evidence || null,
           source_record_id: analysisId,
-          metadata: { reasoning: explanation?.reasoning || null }
+          metadata: {
+            reasoning: explanation?.reasoning || null,
+            sources: [{
+              source: 'resume_extracted',
+              source_record_id: analysisId,
+              verification_status: 'ai_verified',
+              evidence: explanation?.evidence || null
+            }]
+          },
+          last_seen_at: new Date().toISOString()
         }).select('id,skill_name,source,verification_status,confidence,metadata').single();
         if (insertError) throw insertError;
         existingMap.set(key, inserted);
@@ -150,8 +175,10 @@ function App() {
 
   const saveCareerRecommendationSnapshots = async (analysisId, recommendations = []) => {
     if (!recommendations.length) return;
-    const rows = recommendations.map((rec) => ({
+    const timestamp = Date.now();
+    const rows = recommendations.map((rec, index) => ({
       user_id: user.id,
+      client_record_key: `${analysisId}:${rec.id || index}:${timestamp}`,
       source_analysis_id: analysisId,
       career_id: rec.id,
       career_title: rec.path,
@@ -183,7 +210,11 @@ function App() {
         skills_count: data.extracted_skills?.length || 0,
         extracted_skills: data.extracted_skills || [],
         explanations: data.explanations || [],
-        recommendations: data.recommendations || []
+        recommendations: data.recommendations || [],
+        ai_failed: Boolean(data.ai_failed),
+        extraction_status: data.ai_failed ? 'fallback_completed' : 'completed',
+        document_type: 'resume',
+        raw_analysis: data
       }).select('id').single();
       if (saveError) throw saveError;
       await syncResumeSkills(savedAnalysis.id, data);
@@ -222,7 +253,7 @@ function App() {
   }
 
   if (loading) {
-    return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-indigo-600" /></div>;
+    return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="animate-spin rounded-full h-14 w-14 border-4 border-indigo-100 border-t-indigo-600" /></div>;
   }
 
   if (!user) return <Auth onAuthSuccess={handleAuthSuccess} />;
@@ -230,6 +261,7 @@ function App() {
   return (
     <UserDashboard
       user={user}
+      onboardingComplete={hasCompletedOnboarding}
       onLogout={handleLogout}
       onStartOnboarding={() => setShowOnboarding(true)}
       onViewAnalysis={(savedAnalysis) => {
@@ -248,7 +280,7 @@ function App() {
         setError(null);
       }}
     >
-      {error && <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{error}</div>}
+      {error && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{error}</div>}
       {!results ? (
         <UploadComponent onUploadSuccess={handleUploadSuccess} onUploadError={handleUploadError} isLoading={isLoading} setIsLoading={setIsLoading} />
       ) : showRecommendations ? (
