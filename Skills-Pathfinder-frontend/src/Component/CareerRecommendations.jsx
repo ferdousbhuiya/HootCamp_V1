@@ -6,14 +6,20 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-const safeArray = (value) => (Array.isArray(value) ? value : []);
-const percent = (value) => `${Math.round((Number(value) || 0) * 100)}%`;
+const safeArray = (value) => Array.isArray(value) ? value : [];
 const normalize = (value = '') => String(value).trim().toLowerCase().replace(/[^a-z0-9+#./ -]+/g, ' ').replace(/\s+/g, ' ');
 const apiBase = () => (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const matchPercent = (rec) => {
+  const direct = Number(rec?.match_percentage);
+  if (Number.isFinite(direct)) return Math.max(0, Math.min(100, Math.round(direct)));
+  const score = Number(rec?.match_score);
+  if (!Number.isFinite(score)) return 0;
+  return Math.max(0, Math.min(100, Math.round(score <= 1 ? score * 100 : score)));
+};
 const currency = (value) => Number.isFinite(Number(value)) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(value)) : null;
 const integer = (value) => Number.isFinite(Number(value)) ? new Intl.NumberFormat('en-US').format(Number(value)) : null;
 
-const meaningfulPhraseMatch = (left, right) => {
+const meaningfulMatch = (left, right) => {
   const a = normalize(left);
   const b = normalize(right);
   if (!a || !b) return false;
@@ -34,99 +40,139 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
   const [marketLoading, setMarketLoading] = useState(false);
 
   useEffect(() => {
-    const fetchUserData = async () => {
-      if (!user) return;
-      const [skillsResult, coursesResult] = await Promise.all([
+    let active = true;
+    const loadSavedEvidence = async () => {
+      if (!user?.id) return;
+      const [skillResult, courseResult] = await Promise.all([
         supabase.from('skill_tracking').select('*').eq('user_id', user.id),
         supabase.from('ongoing_courses').select('*').eq('user_id', user.id)
       ]);
-      if (skillsResult.error) console.error('Could not load tracked skills:', skillsResult.error);
-      if (coursesResult.error) console.error('Could not load ongoing courses:', coursesResult.error);
-      setUserSkills(skillsResult.data || []);
-      setUserCourses(coursesResult.data || []);
+      if (!active) return;
+      if (!skillResult.error) setUserSkills(skillResult.data || []);
+      if (!courseResult.error) setUserCourses(courseResult.data || []);
     };
-    fetchUserData();
-  }, [user]);
+    loadSavedEvidence();
+    return () => { active = false; };
+  }, [user?.id]);
 
   useEffect(() => {
-    if (Array.isArray(skills?.recommendations)) {
-      setRecommendations(skills.recommendations);
-      setLoading(false);
-      return;
-    }
-    if (!safeArray(skills?.extracted_skills).length) {
-      setRecommendations([]);
-      setLoading(false);
-      return;
-    }
-
-    const fetchRecommendations = async () => {
+    let cancelled = false;
+    const calculate = async () => {
       setLoading(true);
       setError(null);
       try {
+        const savedRecommendations = safeArray(skills?.recommendations);
+        if (savedRecommendations.length) {
+          if (!cancelled) setRecommendations(savedRecommendations);
+          return;
+        }
+
+        const evidence = safeArray(skills?.extracted_skills);
+        if (!evidence.length) {
+          if (!cancelled) setRecommendations([]);
+          return;
+        }
+
         const response = await fetch(`${apiBase()}/api/recommendations`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ extracted_skills: skills.extracted_skills })
+          body: JSON.stringify({ extracted_skills: evidence })
         });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || 'Failed to fetch recommendations');
-        setRecommendations(safeArray(data.recommendations));
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.detail || `Career recommendation request failed (${response.status})`);
+        const calculated = safeArray(body.recommendations);
+        if (!cancelled) setRecommendations(calculated);
+
+        if (user?.id && calculated.length) {
+          if (skills?.analysis_id) {
+            const { error: analysisError } = await supabase.from('resume_analyses')
+              .update({ recommendations: calculated })
+              .eq('id', skills.analysis_id)
+              .eq('user_id', user.id);
+            if (analysisError) console.error('Could not attach calculated recommendations to analysis:', analysisError);
+          }
+
+          const sourceKey = skills?.analysis_id || `unified-${Date.now()}`;
+          const rows = calculated.map((rec, index) => ({
+            user_id: user.id,
+            client_record_key: `career-intelligence:${sourceKey}:${rec.id || index}`,
+            source_analysis_id: skills?.analysis_id || null,
+            career_id: rec.id || null,
+            career_title: rec.path || rec.career_title || 'Career path',
+            category: rec.category || null,
+            match_score: rec.match_score ?? null,
+            match_percentage: rec.match_percentage ?? matchPercent(rec),
+            skill_gap_percentage: rec.skill_gap_percentage ?? null,
+            matched_skills: rec.matched_skills || [],
+            missing_skills: rec.missing_skills || [],
+            recommendation_data: rec,
+            market_data: {},
+            updated_at: new Date().toISOString()
+          }));
+          const { error: persistError } = await supabase.from('career_recommendations').upsert(rows, { onConflict: 'user_id,client_record_key' });
+          if (persistError) console.error('Could not persist calculated recommendations:', persistError);
+
+          const { error: findingError } = await supabase.from('career_findings').upsert({
+            user_id: user.id,
+            client_record_key: `career-intelligence:${sourceKey}`,
+            finding_type: 'career_intelligence_snapshot',
+            source_type: skills?.evidence_only ? 'unified_saved_profile' : 'analysis',
+            source_id: skills?.analysis_id || null,
+            title: calculated[0]?.path ? `Career Intelligence: ${calculated[0].path}` : 'Career Intelligence',
+            status: 'active',
+            data: {
+              recommendations: calculated,
+              evidence_count: evidence.length,
+              career_goal: skills?.career_goal || null,
+              generated_at: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'user_id,client_record_key' });
+          if (findingError) console.error('Could not persist Career Intelligence finding:', findingError);
+        }
       } catch (err) {
-        setError(err?.message || 'Unable to load career recommendations.');
+        if (!cancelled) setError(err?.message || 'Unable to calculate Career Intelligence.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
-    fetchRecommendations();
-  }, [skills]);
+    calculate();
+    return () => { cancelled = true; };
+  }, [skills, user?.id]);
 
   const rankedRecommendations = useMemo(
-    () => [...recommendations].sort((a, b) => (Number(b.match_score) || 0) - (Number(a.match_score) || 0)),
+    () => [...recommendations].sort((a, b) => matchPercent(b) - matchPercent(a)),
     [recommendations]
   );
-
-  const bestCareer = rankedRecommendations[0];
+  const bestCareer = rankedRecommendations[0] || null;
 
   useEffect(() => {
     if (!rankedRecommendations.length) return;
     let cancelled = false;
-
-    const persistMarketSnapshot = async (career, payload) => {
-      if (!user?.id || !payload) return;
-      const key = `market:${career.id || normalize(career.path)}`;
-      const { error: findingError } = await supabase.from('career_findings').upsert({
-        user_id: user.id,
-        client_record_key: key,
-        finding_type: 'market_snapshot',
-        source_type: 'BLS_OEWS_AND_ONET',
-        title: career.path,
-        status: payload.available ? 'current_data_available' : 'current_data_unavailable',
-        data: { career_id: career.id || null, career_title: career.path, market_data: payload },
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id,client_record_key' });
-      if (findingError) console.error(`Could not save market snapshot for ${career.path}:`, findingError);
-
-      const { error: recUpdateError } = await supabase
-        .from('career_recommendations')
-        .update({ market_data: payload, updated_at: new Date().toISOString() })
-        .eq('user_id', user.id)
-        .eq('career_id', career.id);
-      if (recUpdateError) console.error(`Could not update career market snapshot for ${career.path}:`, recUpdateError);
-    };
-
     const loadMarket = async () => {
       setMarketLoading(true);
       const next = {};
       await Promise.all(rankedRecommendations.slice(0, 5).map(async (career) => {
         try {
-          const response = await fetch(`${apiBase()}/api/market-data?career_title=${encodeURIComponent(career.path)}`);
+          const response = await fetch(`${apiBase()}/api/market-data?career_title=${encodeURIComponent(career.path || career.career_title || '')}`);
           const body = await response.json().catch(() => ({}));
-          if (!response.ok || body.status !== 'success') throw new Error(body.detail || `Market lookup returned ${response.status}`);
-          next[career.id || career.path] = body.market_data;
-          await persistMarketSnapshot(career, body.market_data);
-        } catch (marketError) {
-          console.warn(`Current market data unavailable for ${career.path}:`, marketError);
+          if (!response.ok || body.status !== 'success') return;
+          const key = career.id || career.path || career.career_title;
+          next[key] = body.market_data;
+          if (user?.id) {
+            await supabase.from('career_findings').upsert({
+              user_id: user.id,
+              client_record_key: `market:${career.id || normalize(career.path || career.career_title)}`,
+              finding_type: 'market_snapshot',
+              source_type: 'BLS_OEWS_AND_ONET',
+              title: career.path || career.career_title,
+              status: body.market_data?.available ? 'current_data_available' : 'current_data_unavailable',
+              data: { career_id: career.id || null, career_title: career.path || career.career_title, market_data: body.market_data },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id,client_record_key' });
+          }
+        } catch (err) {
+          console.warn('Market enrichment unavailable:', err);
         }
       }));
       if (!cancelled) {
@@ -134,130 +180,86 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
         setMarketLoading(false);
       }
     };
-
     loadMarket();
     return () => { cancelled = true; };
   }, [rankedRecommendations, user?.id]);
 
-  const marketFor = (rec) => marketData[rec?.id || rec?.path] || null;
+  const marketFor = (rec) => marketData[rec?.id || rec?.path || rec?.career_title] || null;
   const salaryFor = (rec) => {
-    const current = marketFor(rec)?.bls;
-    return current?.available && current.mean_annual_wage ? currency(current.mean_annual_wage) : (rec.median_salary || 'Not available');
-  };
-
-  const getSkillVerificationStatus = (skillName = '') => {
-    const target = normalize(skillName);
-    const skill = userSkills.find((item) => normalize(item.skill_name) === target);
-    if (!skill) return { status: 'not_found', badge: '' };
-    if (skill.verification_status === 'certificate_verified') return { status: 'verified', badge: 'Verified' };
-    if (skill.verification_status === 'in_progress') return { status: 'in_progress', badge: 'In progress' };
-    if (skill.verification_status === 'ai_verified') return { status: 'ai_verified', badge: 'AI extracted' };
-    if (skill.verification_status === 'certificate_extracted_unverified') return { status: 'certificate_extracted', badge: 'Certificate extracted' };
-    return { status: 'self_reported', badge: 'Tracked' };
+    const bls = marketFor(rec)?.bls;
+    return bls?.available && bls.mean_annual_wage ? currency(bls.mean_annual_wage) : (rec?.median_salary || 'Not available');
   };
 
   const courseAlignment = (rec) => {
     const missing = safeArray(rec?.missing_skills);
-    return userCourses.filter((course) => {
-      const signals = [course.course_name, ...safeArray(course.extracted_skills).map((skill) => skill?.name || skill)].filter(Boolean);
-      return missing.some((skill) => signals.some((signal) => meaningfulPhraseMatch(skill, signal)));
-    });
+    return userCourses.map((course) => {
+      const signals = [course.course_name, course.subject_area, ...safeArray(course.extracted_skills).map((item) => item?.name || item)].filter(Boolean);
+      const addressed = missing.filter((gap) => signals.some((signal) => meaningfulMatch(gap, signal)));
+      return { ...course, addressed };
+    }).filter((course) => course.addressed.length > 0);
   };
 
-  if (loading) {
-    return <div className="bg-white rounded-xl shadow-lg p-12 text-center"><div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-indigo-600 mx-auto"/><p className="mt-6 text-lg text-gray-600 font-medium">Analyzing your career path...</p></div>;
-  }
+  const verificationBadge = (skillName) => {
+    const item = userSkills.find((skill) => normalize(skill.skill_name) === normalize(skillName));
+    if (!item) return '';
+    if (item.verification_status === 'certificate_verified') return 'Verified';
+    if (item.verification_status === 'ai_verified') return 'AI evidence';
+    if (item.verification_status === 'certificate_extracted_unverified') return 'Certificate evidence';
+    return 'Tracked';
+  };
 
-  if (error) {
-    return <div className="bg-red-50 border border-red-200 rounded-xl p-8 text-center"><h3 className="text-red-800 font-semibold text-lg mb-2">Error Loading Recommendations</h3><p className="text-red-600 mb-4">{error}</p><button onClick={onBack} className="text-indigo-600 hover:underline">Go Back</button></div>;
-  }
+  if (loading) return <div className="app-card flex min-h-[420px] items-center justify-center p-8"><div className="text-center"><div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-indigo-100 border-t-indigo-600" /><p className="mt-4 font-semibold text-slate-600">Building Career Intelligence from your saved evidence…</p></div></div>;
+
+  if (error) return <div className="app-card border-rose-200 p-8 text-center"><h3 className="text-lg font-bold text-rose-800">Career Intelligence could not be calculated</h3><p className="mt-2 text-sm text-rose-700">{error}</p><button onClick={onBack} className="mt-5 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-bold text-white">Go back</button></div>;
 
   return (
-    <div className="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
-      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-6">
-        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
-          <div><h1 className="text-2xl font-bold">Career Path Recommendations</h1><p className="mt-1 text-indigo-100">{rankedRecommendations.length} career paths matched to your current evidence</p></div>
-          <button onClick={onBack} className="bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg">Back to Skills</button>
+    <div className="space-y-6">
+      <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-950 via-slate-950 to-teal-950 p-6 text-white shadow-xl sm:p-8">
+        <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+          <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-teal-300">Career Intelligence</p><h2 className="mt-2 text-3xl font-black">{bestCareer ? `Best current fit: ${bestCareer.path || bestCareer.career_title}` : 'Build a stronger evidence profile'}</h2><p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">Uses saved skills, academic subjects, courses, certificates, and resume evidence. A resume is not required.</p>{skills?.career_goal?.career_title && <p className="mt-3 text-sm font-semibold text-sky-200">Student target: {skills.career_goal.career_title}</p>}</div>
+          <button onClick={onBack} className="rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-bold">Back</button>
         </div>
-      </div>
+      </section>
 
-      <div className="p-6">
-        {!bestCareer ? (
-          <div className="text-center py-12"><h3 className="text-xl font-semibold text-gray-800 mb-2">No career paths found</h3><p className="text-gray-500">Add more resume, certificate, course, or self-reported skill evidence and try again.</p></div>
-        ) : (
-          <>
-            <div className="mb-6 rounded-xl border border-indigo-200 bg-indigo-50 p-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Best career for you right now</p>
-              <div className="mt-2 flex flex-col md:flex-row md:items-end md:justify-between gap-3">
-                <div><h2 className="text-2xl font-bold text-gray-900">{bestCareer.path}</h2><p className="text-gray-600">{bestCareer.category} · {safeArray(bestCareer.matched_skills).length} matching skills · {safeArray(bestCareer.missing_skills).length} priority gaps</p></div>
-                <div className="text-3xl font-bold text-indigo-700">{percent(bestCareer.match_score)}</div>
+      {!bestCareer ? (
+        <section className="app-card p-8 text-center"><h3 className="text-xl font-bold text-slate-900">No career match yet</h3><p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-500">Your saved evidence was loaded correctly, but it did not match enough career requirements. Add more specific subjects, skills learned, certificate subjects, or course skills and generate again.</p></section>
+      ) : <>
+        <section className="grid gap-4 lg:grid-cols-4">
+          <div className="app-card p-5 lg:col-span-2"><p className="text-xs font-bold uppercase tracking-[0.14em] text-indigo-600">Career snapshot</p><h3 className="mt-2 text-2xl font-black text-slate-950">{bestCareer.path || bestCareer.career_title}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{bestCareer.match_reason || `You currently match ${safeArray(bestCareer.matched_skills).length} core skills and have ${safeArray(bestCareer.missing_skills).length} priority gaps.`}</p></div>
+          <div className="app-card p-5"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Match</p><p className="mt-2 text-4xl font-black text-indigo-700">{matchPercent(bestCareer)}%</p><p className="mt-1 text-xs text-slate-500">Evidence-based fit</p></div>
+          <div className="app-card p-5"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Annual wage</p><p className="mt-2 text-2xl font-black text-slate-950">{salaryFor(bestCareer)}</p><p className="mt-1 text-xs text-slate-500">{marketFor(bestCareer)?.bls?.available ? 'Current BLS mapping' : 'Catalog/reference data'}</p></div>
+        </section>
+
+        <section className="app-card overflow-hidden">
+          <div className="border-b border-slate-200 p-6"><div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-teal-700">Career comparison</p><h3 className="mt-1 text-xl font-bold text-slate-950">Leading paths from your current evidence</h3></div>{marketLoading && <span className="text-xs text-slate-400">Refreshing market data…</span>}</div></div>
+          <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="p-4">Career</th><th className="p-4">Match</th><th className="p-4">Matched</th><th className="p-4">Gaps</th><th className="p-4">Wage</th></tr></thead><tbody>{rankedRecommendations.slice(0, 5).map((rec) => <tr key={rec.id || rec.path} className="border-t border-slate-100"><td className="p-4 font-bold text-slate-900">{rec.path || rec.career_title}</td><td className="p-4">{matchPercent(rec)}%</td><td className="p-4">{safeArray(rec.matched_skills).length}</td><td className="p-4">{safeArray(rec.missing_skills).length}</td><td className="p-4">{salaryFor(rec)}</td></tr>)}</tbody></table></div>
+        </section>
+
+        <section className="space-y-4">
+          {rankedRecommendations.map((rec, index) => {
+            const matched = safeArray(rec.matched_skills);
+            const missing = safeArray(rec.missing_skills);
+            const aligned = courseAlignment(rec);
+            const market = marketFor(rec);
+            const open = selectedCareer?.id === rec.id || (!rec.id && selectedCareer?.path === rec.path);
+            return <article key={rec.id || rec.path} className={`app-card overflow-hidden ${index === 0 ? 'border-indigo-200' : ''}`}>
+              <div className="p-6"><div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-xl font-bold text-slate-950">{rec.path || rec.career_title}</h3>{index === 0 && <span className="rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-bold text-indigo-800">Top match</span>}</div><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{rec.match_reason || 'Match calculated from your current saved evidence.'}</p></div><span className="text-3xl font-black text-indigo-700">{matchPercent(rec)}%</span></div>
+                <div className="mt-5 grid gap-5 md:grid-cols-2"><div><p className="text-sm font-bold text-emerald-800">Matching evidence</p><div className="mt-2 flex flex-wrap gap-2">{matched.length ? matched.map((item) => <span key={item} className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">{item}{verificationBadge(item) ? ` · ${verificationBadge(item)}` : ''}</span>) : <span className="text-sm text-slate-400">No explicit matched skills returned.</span>}</div></div><div><p className="text-sm font-bold text-amber-800">Priority gaps</p><div className="mt-2 flex flex-wrap gap-2">{missing.length ? missing.map((item) => <span key={item} className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">{item}</span>) : <span className="text-sm text-slate-400">No major skill gaps returned.</span>}</div></div></div>
+                {aligned.length > 0 && <div className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-4"><p className="text-sm font-bold text-sky-900">Your current courses are already closing gaps</p>{aligned.map((course) => <p key={course.id || course.course_name} className="mt-1 text-sm text-sky-800"><strong>{course.course_name}</strong> addresses: {course.addressed.join(', ')}</p>)}</div>}
+                <button onClick={() => { setSelectedCareer(open ? null : rec); setActiveTab('overview'); }} className="mt-5 w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white">{open ? 'Hide details' : 'View details & roadmap'}</button>
               </div>
-              {marketLoading && <p className="mt-3 text-xs text-indigo-500">Refreshing current BLS/O*NET market evidence...</p>}
-            </div>
-
-            {rankedRecommendations.length > 1 && (
-              <div className="mb-8 overflow-x-auto">
-                <h3 className="font-semibold text-gray-800 mb-3">Career comparison</h3>
-                <table className="min-w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
-                  <thead className="bg-gray-50"><tr><th className="text-left p-3">Career</th><th className="text-left p-3">Match</th><th className="text-left p-3">Annual wage</th><th className="text-left p-3">Skill gaps</th></tr></thead>
-                  <tbody>{rankedRecommendations.slice(0, 5).map((rec) => { const bls = marketFor(rec)?.bls; return <tr key={rec.id || rec.path} className="border-t"><td className="p-3 font-medium">{rec.path}</td><td className="p-3">{percent(rec.match_score)}</td><td className="p-3"><div className="font-medium">{salaryFor(rec)}</div><div className="text-xs text-gray-400">{bls?.available ? `BLS ${bls.source_period}` : 'catalog reference'}</div></td><td className="p-3">{safeArray(rec.missing_skills).length}</td></tr>; })}</tbody>
-                </table>
-                <p className="mt-2 text-xs text-gray-400">When current BLS mapping is available, the table shows the latest configured OEWS mean annual wage; otherwise it keeps the career-catalog reference. Market snapshots are saved with their source and retrieval date.</p>
-              </div>
-            )}
-
-            <div className="space-y-6">
-              {rankedRecommendations.map((rec, index) => {
-                const matched = safeArray(rec.matched_skills);
-                const missing = safeArray(rec.missing_skills);
-                const alignedCourses = courseAlignment(rec);
-                const market = marketFor(rec);
-                const bls = market?.bls;
-                const onet = market?.onet;
-                return (
-                  <div key={rec.id || rec.path} className={`rounded-lg border-2 ${index === 0 ? 'border-indigo-300 bg-indigo-50/40' : 'border-gray-200 bg-white'}`}>
-                    <div className="p-6">
-                      <div className="flex flex-col md:flex-row md:justify-between gap-4">
-                        <div><div className="flex flex-wrap items-center gap-2"><h3 className="text-xl font-bold text-gray-800">{rec.path}</h3>{index === 0 && <span className="bg-indigo-600 text-white text-xs px-3 py-1 rounded-full">Top Match</span>}<span className="bg-gray-100 text-gray-700 text-xs px-3 py-1 rounded-full">{rec.category}</span></div><p className="mt-3 text-sm text-gray-600">{rec.match_reason || `Your profile currently covers ${matched.length} of ${matched.length + missing.length} core skills.`}</p></div>
-                        <div className="text-2xl font-bold text-indigo-700">{percent(rec.match_score)}</div>
-                      </div>
-
-                      <div className="mt-4 h-2 bg-gray-200 rounded-full"><div className="h-2 rounded-full bg-indigo-600" style={{ width: percent(rec.match_score) }}/></div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 my-5">
-                        <div className="p-3 rounded-lg border bg-white"><p className="text-xs text-gray-500">Market occupation</p><p className="font-semibold text-sm">{onet?.available ? onet.occupation_title : (bls?.available ? bls.occupation_title : 'Current mapping unavailable')}</p>{onet?.available && <p className="mt-1 text-xs text-gray-400">O*NET {onet.source_release}</p>}</div>
-                        <div className="p-3 rounded-lg border bg-white"><p className="text-xs text-gray-500">Annual wage</p><p className="font-semibold">{salaryFor(rec)}</p><p className="mt-1 text-xs text-gray-400">{bls?.available ? `${bls.source_period} OEWS mean annual wage` : 'catalog reference'}</p></div>
-                        <div className="p-3 rounded-lg border bg-white"><p className="text-xs text-gray-500">National employment</p><p className="font-semibold">{bls?.available ? integer(bls.employment) : 'Not available'}</p><p className="mt-1 text-xs text-gray-400">{bls?.available ? 'BLS OEWS' : safeArray(rec.top_locations).slice(0, 3).join(', ') || 'United States'}</p></div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                        <div><h4 className="font-semibold text-emerald-700 mb-2">Your matching skills</h4><div className="flex flex-wrap gap-2">{matched.map((skill) => { const verification = getSkillVerificationStatus(skill); return <span key={skill} className="px-3 py-1 rounded-full text-sm bg-emerald-100 text-emerald-800 border border-emerald-200">{skill}{verification.badge ? ` · ${verification.badge}` : ''}</span>; })}</div></div>
-                        <div><h4 className="font-semibold text-amber-700 mb-2">Skills to develop</h4><div className="flex flex-wrap gap-2">{missing.map((skill) => <span key={skill} className="px-3 py-1 rounded-full text-sm bg-amber-100 text-amber-800 border border-amber-200">{skill}</span>)}</div></div>
-                      </div>
-
-                      {alignedCourses.length > 0 && <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-800"><strong>Course-path alignment:</strong> {alignedCourses.map((c) => c.course_name).join(', ')} already overlaps one or more current skill gaps. Keep the course in progress before adding a duplicate beginner recommendation.</div>}
-
-                      <button onClick={() => { setSelectedCareer(selectedCareer?.id === rec.id ? null : rec); setActiveTab('overview'); }} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg mt-5">{selectedCareer?.id === rec.id ? 'Hide Details' : 'View Career Details & Roadmap'}</button>
-                    </div>
-
-                    {selectedCareer?.id === rec.id && (
-                      <div className="border-t-2 border-indigo-200 bg-white p-6">
-                        <div className="flex border-b border-gray-200 mb-4 overflow-x-auto">{['overview', 'market', 'certifications', 'degrees', 'next-steps', 'resources'].map((tab) => <button key={tab} className={`px-4 py-2 font-medium text-sm capitalize whitespace-nowrap ${activeTab === tab ? 'border-indigo-500 text-indigo-600 border-b-2' : 'text-gray-500'}`} onClick={() => setActiveTab(tab)}>{tab.replace('-', ' ')}</button>)}</div>
-                        {activeTab === 'overview' && <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4"><h5 className="font-semibold text-indigo-800 mb-2">Skill-gap roadmap</h5><p className="text-indigo-700 text-sm">Current match: {percent(rec.match_score)}. Prioritize {missing.slice(0, 3).join(', ') || 'maintaining and demonstrating your current skills'}. Add project, certificate, course, or work evidence as you develop each gap.</p></div>}
-                        {activeTab === 'market' && <div className="space-y-4"><div className="rounded-lg border border-slate-200 bg-slate-50 p-4"><h5 className="font-semibold text-slate-900">Current market evidence</h5>{bls?.available ? <div className="mt-3 grid gap-2 text-sm text-slate-700"><p><strong>BLS occupation:</strong> {bls.occupation_title}</p><p><strong>National employment:</strong> {integer(bls.employment)}</p><p><strong>Mean annual wage:</strong> {currency(bls.mean_annual_wage)}</p><p><strong>Median hourly wage:</strong> {bls.median_hourly_wage ? `$${Number(bls.median_hourly_wage).toFixed(2)}` : 'Not available'}</p><p className="text-xs text-slate-400">Source: {bls.source}, {bls.source_period}. Retrieved {market?.retrieved_at ? new Date(market.retrieved_at).toLocaleString() : 'this session'}.</p></div> : <p className="mt-2 text-sm text-slate-500">A conservative BLS mapping is not yet available for this specific career title. The career match remains usable without market enrichment.</p>}</div>{onet?.available && <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4"><h5 className="font-semibold text-indigo-900">O*NET occupation context</h5><p className="mt-2 text-sm text-indigo-800"><strong>{onet.occupation_title}</strong>{onet.onet_soc_code ? ` · ${onet.onet_soc_code}` : ''}</p><p className="mt-2 text-sm leading-6 text-indigo-700">{onet.description}</p><p className="mt-2 text-xs text-indigo-400">Source: {onet.source}, release {onet.source_release}.</p></div>}</div>}
-                        {activeTab === 'certifications' && <div className="space-y-3">{safeArray(rec.recommended_certifications).map((cert) => <div key={cert.name} className="bg-gray-50 border rounded-lg p-4"><div className="flex justify-between gap-3"><h5 className="font-semibold">{cert.name}</h5><span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded">{cert.provider}</span></div><p className="text-sm text-gray-600 mt-2">{cert.time} · {cert.cost}</p>{cert.url && <a href={cert.url} target="_blank" rel="noreferrer" className="inline-block mt-2 text-indigo-600 hover:underline text-sm">Official certification page</a>}</div>)}</div>}
-                        {activeTab === 'degrees' && <div className="space-y-3">{safeArray(rec.recommended_degrees).map((degree) => <div key={degree.name} className="bg-gray-50 border rounded-lg p-4"><h5 className="font-semibold">{degree.name}</h5><p className="text-sm text-gray-600 mt-2">{degree.type} · {degree.duration} · {degree.format}</p></div>)}</div>}
-                        {activeTab === 'next-steps' && <ol className="space-y-3">{safeArray(rec.next_steps).map((step, i) => <li key={`${step}-${i}`} className="flex gap-3"><span className="w-6 h-6 bg-indigo-600 text-white rounded-full flex items-center justify-center text-sm flex-shrink-0">{i + 1}</span><span>{step}</span></li>)}</ol>}
-                        {activeTab === 'resources' && <div className="space-y-3">{safeArray(rec.learning_resources).map((resource) => <div key={resource.name} className="bg-gray-50 border rounded-lg p-4"><h5 className="font-semibold">{resource.name}</h5><p className="text-sm text-gray-600 mt-1">{resource.type} · {resource.cost}</p>{resource.url && <a href={resource.url} target="_blank" rel="noreferrer" className="inline-block mt-2 text-indigo-600 hover:underline text-sm">Open learning resource</a>}</div>)}</div>}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </div>
+              {open && <div className="border-t border-slate-200 bg-slate-50/60 p-6"><div className="flex gap-2 overflow-x-auto">{['overview','market','certifications','degrees','next-steps','resources'].map((tab) => <button key={tab} onClick={() => setActiveTab(tab)} className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold ${activeTab === tab ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'}`}>{tab.replace('-', ' ')}</button>)}</div>
+                {activeTab === 'overview' && <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50 p-4 text-sm leading-6 text-indigo-900">Start with {missing.slice(0, 3).join(', ') || 'documenting and demonstrating your strongest existing skills'}. Add evidence as you complete subjects, courses, projects, or certificates.</div>}
+                {activeTab === 'market' && <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-xl bg-white p-4"><p className="text-xs font-bold uppercase text-slate-400">Annual wage</p><p className="mt-1 text-xl font-bold">{salaryFor(rec)}</p></div><div className="rounded-xl bg-white p-4"><p className="text-xs font-bold uppercase text-slate-400">National employment</p><p className="mt-1 text-xl font-bold">{market?.bls?.available ? integer(market.bls.employment) : 'Not available'}</p></div>{market?.onet?.available && <div className="rounded-xl bg-white p-4 md:col-span-2"><p className="font-bold">{market.onet.occupation_title}</p><p className="mt-2 text-sm leading-6 text-slate-600">{market.onet.description}</p></div>}</div>}
+                {activeTab === 'certifications' && <div className="mt-4 space-y-3">{safeArray(rec.recommended_certifications).length ? safeArray(rec.recommended_certifications).map((item, i) => <div key={`${item.name || item}-${i}`} className="rounded-xl bg-white p-4"><p className="font-bold">{item.name || item}</p>{item.provider && <p className="text-sm text-slate-500">{item.provider}</p>}{item.url && <a className="mt-2 inline-block text-sm font-semibold text-indigo-600" href={item.url} target="_blank" rel="noreferrer">Official page</a>}</div>) : <p className="mt-4 text-sm text-slate-500">No certification recommendation is required for this path yet.</p>}</div>}
+                {activeTab === 'degrees' && <div className="mt-4 space-y-3">{safeArray(rec.recommended_degrees).length ? safeArray(rec.recommended_degrees).map((item, i) => <div key={`${item.name || item}-${i}`} className="rounded-xl bg-white p-4"><p className="font-bold">{item.name || item}</p><p className="text-sm text-slate-500">{[item.type,item.duration,item.format].filter(Boolean).join(' · ')}</p></div>) : <p className="mt-4 text-sm text-slate-500">No additional degree recommendation is specified.</p>}</div>}
+                {activeTab === 'next-steps' && <div className="mt-4 space-y-2">{safeArray(rec.next_steps).length ? safeArray(rec.next_steps).map((step, i) => <div key={`${step}-${i}`} className="flex gap-3 rounded-xl bg-white p-3"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-indigo-600 text-xs font-bold text-white">{i + 1}</span><p className="text-sm text-slate-700">{step}</p></div>) : <p className="text-sm text-slate-500">Use the skill-gap list above as the next-step sequence.</p>}</div>}
+                {activeTab === 'resources' && <div className="mt-4 space-y-3">{safeArray(rec.learning_resources).length ? safeArray(rec.learning_resources).map((item, i) => <div key={`${item.name || item}-${i}`} className="rounded-xl bg-white p-4"><p className="font-bold">{item.name || item}</p>{item.url && <a className="mt-2 inline-block text-sm font-semibold text-indigo-600" href={item.url} target="_blank" rel="noreferrer">Open resource</a>}</div>) : <p className="text-sm text-slate-500">No learning resources are attached to this career yet.</p>}</div>}
+              </div>}
+            </article>;
+          })}
+        </section>
+      </>}
     </div>
   );
 };
