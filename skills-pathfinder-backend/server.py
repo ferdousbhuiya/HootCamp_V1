@@ -55,13 +55,7 @@ def _extract_json_text(raw_text: str) -> str:
 
 
 def _normalize_certificate_date(value: Any) -> str:
-    """Return PostgreSQL-safe YYYY-MM-DD dates or an empty string.
-
-    Certificate providers commonly print dates like ``Jan. 4, 2024`` or
-    ``January 4 2024``. Supabase date columns accept ISO dates, so normalize
-    provider/LLM text at the API boundary rather than letting one certificate
-    break an otherwise successful multi-file upload.
-    """
+    """Return PostgreSQL-safe YYYY-MM-DD dates or an empty string."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -70,28 +64,14 @@ def _normalize_certificate_date(value: Any) -> str:
             return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
         except ValueError:
             return ""
-
     compact = re.sub(r"(?<=\b[A-Za-z]{3})\.", "", text)
     compact = re.sub(r"\s+", " ", compact).strip()
-    formats = (
-        "%b %d, %Y",
-        "%B %d, %Y",
-        "%b %d %Y",
-        "%B %d %Y",
-        "%m/%d/%Y",
-        "%m-%d-%Y",
-        "%Y/%m/%d",
-        "%d %b %Y",
-        "%d %B %Y",
-    )
+    formats = ("%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y", "%m/%d/%Y", "%m-%d-%Y", "%Y/%m/%d", "%d %b %Y", "%d %B %Y")
     for fmt in formats:
         try:
             return datetime.strptime(compact, fmt).date().isoformat()
         except ValueError:
             continue
-
-    # If a provider only prints month/year, avoid inventing a day. Keep the
-    # database date null while the raw extraction preserves the original text.
     return ""
 
 
@@ -328,6 +308,11 @@ async def market_data(career_title: str = Query(..., min_length=2, max_length=18
     return {"status": "success", "market_data": get_market_intelligence(career_title)}
 
 
+async def health_check():
+    """Lightweight liveness endpoint for the reverse proxy/container monitor."""
+    return {"status": "healthy", "service": "skills-pathfinder-api"}
+
+
 def _remove_route(path: str, method: str):
     main_module.app.router.routes = [
         route for route in main_module.app.router.routes
@@ -339,11 +324,13 @@ _remove_route("/api/verify-certificate", "POST")
 _remove_route("/api/generate-career-advice", "POST")
 _remove_route("/api/career-advisor", "POST")
 _remove_route("/api/market-data", "GET")
+_remove_route("/health", "GET")
 
 main_module.app.add_api_route("/api/verify-certificate", verify_certificate_v2, methods=["POST"], tags=["certificates"])
 main_module.app.add_api_route("/api/verify-certificate-link", verify_certificate_link, methods=["POST"], tags=["certificates"])
 main_module.app.add_api_route("/api/generate-career-advice", generate_career_advice_v2, methods=["POST"], tags=["career"])
 main_module.app.add_api_route("/api/career-advisor", career_advisor, methods=["POST"], tags=["career"])
 main_module.app.add_api_route("/api/market-data", market_data, methods=["GET"], tags=["market"])
+main_module.app.add_api_route("/health", health_check, methods=["GET"], tags=["system"], include_in_schema=False)
 
 app = main_module.app
