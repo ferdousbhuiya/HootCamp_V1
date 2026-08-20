@@ -54,7 +54,7 @@ function App() {
           const completed = await readOnboardingState(session.user.id);
           if (!active) return;
           setHasCompletedOnboarding(completed);
-          setShowOnboarding(!completed);
+          setShowOnboarding(false);
           setWorkspaceMode('dashboard');
         } catch (profileError) {
           console.error('Profile onboarding check failed:', profileError);
@@ -62,7 +62,7 @@ function App() {
           setHasCompletedOnboarding(false);
           setShowOnboarding(false);
           setWorkspaceMode('dashboard');
-          setError('Your account is signed in, but onboarding status could not be restored. You can reopen onboarding from the dashboard.');
+          setError('Your account is signed in, but profile completion status could not be restored. You can still use the career workspace and update your profile later.');
         }
       }
       if (active) setLoading(false);
@@ -90,21 +90,21 @@ function App() {
   const handleAuthSuccess = async (authenticatedUser, isNewUser = false) => {
     setUser(authenticatedUser);
     setWorkspaceMode('dashboard');
+    setShowOnboarding(false);
     setError(null);
+
     if (isNewUser) {
       setHasCompletedOnboarding(false);
-      setShowOnboarding(true);
       return;
     }
+
     try {
       const completed = await readOnboardingState(authenticatedUser.id);
       setHasCompletedOnboarding(completed);
-      setShowOnboarding(!completed);
     } catch (profileError) {
       console.error('Could not restore onboarding state after sign in:', profileError);
       setHasCompletedOnboarding(false);
-      setShowOnboarding(false);
-      setError('Signed in successfully, but your onboarding status could not be loaded. You can reopen onboarding from your dashboard.');
+      setError('Signed in successfully, but profile completion status could not be loaded. You can continue and update your profile later.');
     }
   };
 
@@ -263,7 +263,7 @@ function App() {
       .eq('id', user.id);
     if (updateError) {
       console.error('Could not persist onboarding status:', updateError);
-      setError('Onboarding finished, but the completion status could not be saved.');
+      setError('Profile setup finished, but the completion status could not be saved.');
     }
   };
 
@@ -295,9 +295,9 @@ function App() {
       if (!latest) {
         setResults(null);
         setShowRecommendations(false);
-        setWorkspaceMode('analysis');
+        setWorkspaceMode('dashboard');
         setWorkspaceNavigationKey((current) => current + 1);
-        setError('Upload and analyze a resume first. Career Intelligence will appear here as soon as a saved analysis is available.');
+        setError('Career Intelligence needs at least one analyzed evidence profile. Start with Academic Profile & Subjects, a manual profile, or a resume.');
         return;
       }
       setResults({
@@ -345,7 +345,7 @@ function App() {
       ? 'Career Intelligence'
       : results
         ? 'Skill Analysis'
-        : 'Resume Analysis';
+        : 'Profile & Resume Analysis';
 
   return (
     <div className="authenticated-shell">
@@ -371,7 +371,7 @@ function App() {
                 onClick={startNewAnalysis}
                 className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${workspaceMode === 'analysis' && !showRecommendations ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
               >
-                Resume Analysis
+                Profile / Resume
               </button>
               <button
                 onClick={openLatestCareerIntelligence}
@@ -397,7 +397,7 @@ function App() {
             <h1 className="mt-1 text-xl font-bold tracking-tight text-slate-900">{currentWorkspace}</h1>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium text-slate-600">Profile {hasCompletedOnboarding ? 'ready' : 'needs review'}</span>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium text-slate-600">Profile {hasCompletedOnboarding ? 'ready' : 'can be completed anytime'}</span>
             <span className="rounded-full border border-teal-200 bg-teal-50 px-3 py-1.5 font-medium text-teal-800">Evidence saved to Supabase</span>
             {results?.extracted_skills?.length > 0 && <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 font-medium text-sky-800">{results.extracted_skills.length} skills in current analysis</span>}
           </div>
