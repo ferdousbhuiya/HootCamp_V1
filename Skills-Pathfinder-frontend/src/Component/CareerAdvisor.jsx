@@ -1,3 +1,11 @@
 import CareerAdvisorV2 from './CareerAdvisorV2';
+import ProjectFooter from './ProjectFooter';
 
-export default CareerAdvisorV2;
+const CareerAdvisor = (props) => (
+  <>
+    <CareerAdvisorV2 {...props} />
+    <ProjectFooter />
+  </>
+);
+
+export default CareerAdvisor;
