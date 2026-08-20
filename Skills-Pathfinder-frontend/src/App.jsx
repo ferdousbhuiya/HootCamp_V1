@@ -8,6 +8,7 @@ import CareerRecommendations from './Component/CareerRecommendations';
 import OnboardingWizard from './Component/OnboardingWizard';
 import CareerAdvisor from './Component/CareerAdvisor';
 import SavedCareerHistory from './Component/SavedCareerHistory';
+import StudentCareerDashboard from './Component/StudentCareerDashboard';
 import { uploadPrivateDocument } from './lib/documentStorage';
 
 const supabase = createClient(
@@ -28,6 +29,7 @@ function App() {
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [openingCareerIntelligence, setOpeningCareerIntelligence] = useState(false);
   const [workspaceNavigationKey, setWorkspaceNavigationKey] = useState(0);
+  const [workspaceMode, setWorkspaceMode] = useState('dashboard');
 
   const readOnboardingState = async (userId) => {
     const { data: profile, error: profileError } = await supabase
@@ -53,11 +55,13 @@ function App() {
           if (!active) return;
           setHasCompletedOnboarding(completed);
           setShowOnboarding(!completed);
+          setWorkspaceMode('dashboard');
         } catch (profileError) {
           console.error('Profile onboarding check failed:', profileError);
           if (!active) return;
           setHasCompletedOnboarding(false);
           setShowOnboarding(false);
+          setWorkspaceMode('dashboard');
           setError('Your account is signed in, but onboarding status could not be restored. You can reopen onboarding from the dashboard.');
         }
       }
@@ -72,6 +76,7 @@ function App() {
         setShowRecommendations(false);
         setShowOnboarding(false);
         setHasCompletedOnboarding(false);
+        setWorkspaceMode('dashboard');
         setError(null);
       }
     });
@@ -84,6 +89,7 @@ function App() {
 
   const handleAuthSuccess = async (authenticatedUser, isNewUser = false) => {
     setUser(authenticatedUser);
+    setWorkspaceMode('dashboard');
     setError(null);
     if (isNewUser) {
       setHasCompletedOnboarding(false);
@@ -108,6 +114,7 @@ function App() {
     setShowRecommendations(false);
     setShowOnboarding(false);
     setHasCompletedOnboarding(false);
+    setWorkspaceMode('dashboard');
     setError(null);
   };
 
@@ -189,6 +196,7 @@ function App() {
 
   const handleUploadSuccess = async (data, originalFile) => {
     setResults(data);
+    setWorkspaceMode('analysis');
     setShowRecommendations(false);
     setError(null);
     setIsLoading(false);
@@ -247,6 +255,7 @@ function App() {
   const handleOnboardingComplete = async () => {
     setShowOnboarding(false);
     setHasCompletedOnboarding(true);
+    setWorkspaceMode('dashboard');
     if (!user) return;
     const { error: updateError } = await supabase
       .from('profiles')
@@ -260,9 +269,19 @@ function App() {
 
   const handleOnboardingCancel = () => setShowOnboarding(false);
 
+  const openDashboard = () => {
+    setResults(null);
+    setShowRecommendations(false);
+    setWorkspaceMode('dashboard');
+    setError(null);
+    setWorkspaceNavigationKey((current) => current + 1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const openLatestCareerIntelligence = async () => {
     if (!user?.id || openingCareerIntelligence) return;
     setOpeningCareerIntelligence(true);
+    setWorkspaceMode('career');
     setError(null);
     try {
       const { data: latest, error: latestError } = await supabase
@@ -276,6 +295,7 @@ function App() {
       if (!latest) {
         setResults(null);
         setShowRecommendations(false);
+        setWorkspaceMode('analysis');
         setWorkspaceNavigationKey((current) => current + 1);
         setError('Upload and analyze a resume first. Career Intelligence will appear here as soon as a saved analysis is available.');
         return;
@@ -288,10 +308,12 @@ function App() {
         recommendations: latest.recommendations || []
       });
       setShowRecommendations(true);
+      setWorkspaceMode('career');
       setWorkspaceNavigationKey((current) => current + 1);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (careerError) {
       console.error('Could not open Career Intelligence:', careerError);
+      setWorkspaceMode('dashboard');
       setError(`Career Intelligence could not load your latest analysis: ${careerError.message}`);
     } finally {
       setOpeningCareerIntelligence(false);
@@ -301,6 +323,7 @@ function App() {
   const startNewAnalysis = () => {
     setResults(null);
     setShowRecommendations(false);
+    setWorkspaceMode('analysis');
     setError(null);
     setWorkspaceNavigationKey((current) => current + 1);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -316,7 +339,13 @@ function App() {
 
   if (!user) return <Auth onAuthSuccess={handleAuthSuccess} />;
 
-  const currentWorkspace = showRecommendations ? 'Career Intelligence' : results ? 'Skill Analysis' : 'Resume Analysis';
+  const currentWorkspace = workspaceMode === 'dashboard'
+    ? 'Career Dashboard'
+    : showRecommendations || workspaceMode === 'career'
+      ? 'Career Intelligence'
+      : results
+        ? 'Skill Analysis'
+        : 'Resume Analysis';
 
   return (
     <div className="authenticated-shell">
@@ -333,15 +362,21 @@ function App() {
 
             <nav className="ml-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-xl bg-white/5 p-1" aria-label="Primary workspace navigation">
               <button
+                onClick={openDashboard}
+                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${workspaceMode === 'dashboard' ? 'bg-teal-400 text-slate-950 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+              >
+                Dashboard
+              </button>
+              <button
                 onClick={startNewAnalysis}
-                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${!results ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${workspaceMode === 'analysis' && !showRecommendations ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
               >
                 Resume Analysis
               </button>
               <button
                 onClick={openLatestCareerIntelligence}
                 disabled={openingCareerIntelligence}
-                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-60 ${showRecommendations ? 'bg-teal-400 text-slate-950 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-60 ${showRecommendations || workspaceMode === 'career' ? 'bg-teal-400 text-slate-950 shadow-sm' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
               >
                 {openingCareerIntelligence ? 'Opening…' : 'Career Intelligence'}
               </button>
@@ -376,6 +411,7 @@ function App() {
         onLogout={handleLogout}
         onStartOnboarding={() => setShowOnboarding(true)}
         onViewAnalysis={(savedAnalysis) => {
+          setWorkspaceMode('analysis');
           if (savedAnalysis) {
             setResults({
               filename: savedAnalysis.filename,
@@ -392,12 +428,19 @@ function App() {
         }}
       >
         {error && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">{error}</div>}
-        {!results ? (
+        {workspaceMode === 'dashboard' ? (
+          <StudentCareerDashboard
+            user={user}
+            onAnalyzeResume={startNewAnalysis}
+            onOpenCareerIntelligence={openLatestCareerIntelligence}
+            onUpdateProfile={() => setShowOnboarding(true)}
+          />
+        ) : !results ? (
           <UploadComponent onUploadSuccess={handleUploadSuccess} onUploadError={handleUploadError} isLoading={isLoading} setIsLoading={setIsLoading} />
         ) : showRecommendations ? (
-          <CareerRecommendations skills={results} user={user} onBack={() => setShowRecommendations(false)} />
+          <CareerRecommendations skills={results} user={user} onBack={() => { setShowRecommendations(false); setWorkspaceMode('analysis'); }} />
         ) : (
-          <SkillDashboard results={results} onBack={() => { setResults(null); setError(null); }} onRecommendations={() => setShowRecommendations(true)} />
+          <SkillDashboard results={results} onBack={() => { setResults(null); setWorkspaceMode('analysis'); setError(null); }} onRecommendations={() => { setShowRecommendations(true); setWorkspaceMode('career'); }} />
         )}
       </UserDashboard>
       <SavedCareerHistory user={user} />
