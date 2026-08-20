@@ -9,10 +9,20 @@ const supabase = createClient(
 
 const apiBase = () => (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 const asList = (value) => Array.isArray(value) ? value : value ? [value] : [];
+const safeText = (value, fallback = 'Not provided') => String(value || '').trim() || fallback;
+const percent = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'Not available';
+  return `${Math.round(numeric <= 1 ? numeric * 100 : numeric)}%`;
+};
 
 const CareerReport = ({ user, profile, skills = [], certifications = [], courses = [], onClose }) => {
   const [loading, setLoading] = useState(true);
   const [advice, setAdvice] = useState(null);
+  const [academicProfile, setAcademicProfile] = useState(null);
+  const [academicSubjects, setAcademicSubjects] = useState([]);
+  const [careerGoal, setCareerGoal] = useState(null);
+  const [careerRows, setCareerRows] = useState([]);
   const [error, setError] = useState(null);
   const [savedReportId, setSavedReportId] = useState(null);
   const reportRef = useRef();
@@ -29,14 +39,30 @@ const CareerReport = ({ user, profile, skills = [], certifications = [], courses
     setLoading(true);
     setError(null);
     try {
-      const skillNames = skills.map((item) => item?.skill_name || item?.name || (typeof item === 'string' ? item : '')).filter(Boolean);
-      const { data: careerRows, error: careerError } = await supabase
-        .from('career_recommendations')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(5);
-      if (careerError) throw careerError;
+      const [careerResult, academicResult, subjectsResult, goalResult] = await Promise.all([
+        supabase.from('career_recommendations').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(5),
+        supabase.from('academic_profiles').select('*').eq('user_id', user.id).maybeSingle(),
+        supabase.from('academic_subjects').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabase.from('career_goals').select('*').eq('user_id', user.id).eq('status', 'active').order('created_at', { ascending: false }).limit(1).maybeSingle()
+      ]);
+
+      if (careerResult.error) throw careerResult.error;
+      if (academicResult.error) throw academicResult.error;
+      if (subjectsResult.error) throw subjectsResult.error;
+      if (goalResult.error) throw goalResult.error;
+
+      const currentAcademicProfile = academicResult.data || null;
+      const currentSubjects = subjectsResult.data || [];
+      const currentGoal = goalResult.data || null;
+      const currentCareers = careerResult.data || [];
+      setAcademicProfile(currentAcademicProfile);
+      setAcademicSubjects(currentSubjects);
+      setCareerGoal(currentGoal);
+      setCareerRows(currentCareers);
+
+      const academicSkillNames = currentSubjects.flatMap((subject) => asList(subject.skills_learned));
+      const trackedSkillNames = skills.map((item) => item?.skill_name || item?.name || (typeof item === 'string' ? item : '')).filter(Boolean);
+      const skillNames = [...new Set([...trackedSkillNames, ...academicSkillNames].map((item) => String(item).trim()).filter(Boolean))];
 
       const response = await fetch(`${apiBase()}/api/generate-career-advice`, {
         method: 'POST',
@@ -45,7 +71,7 @@ const CareerReport = ({ user, profile, skills = [], certifications = [], courses
           skills: skillNames,
           certifications,
           courses,
-          career_recommendations: careerRows || []
+          career_recommendations: currentCareers
         })
       });
       if (!response.ok) {
@@ -55,13 +81,28 @@ const CareerReport = ({ user, profile, skills = [], certifications = [], courses
 
       const payload = await response.json();
       if (payload.status !== 'success' || !payload.advice) throw new Error('Career advice response was incomplete.');
-      setAdvice(payload.advice);
+
+      const reportData = {
+        ...payload.advice,
+        academic_profile: currentAcademicProfile,
+        academic_subjects: currentSubjects,
+        career_goal: currentGoal,
+        career_recommendations_snapshot: currentCareers,
+        evidence_summary: {
+          tracked_skills: skills.length,
+          academic_subjects: currentSubjects.length,
+          certifications: certifications.length,
+          ongoing_courses: courses.length,
+          verified_certifications: certifications.filter((item) => item.is_verified || item.verification_status === 'electronically_verified').length
+        }
+      };
+      setAdvice(reportData);
 
       const { data: reportRow, error: reportError } = await supabase.from('career_reports').insert({
         user_id: user.id,
         report_type: 'career_intelligence',
-        report_data: payload.advice,
-        profile_snapshot: profile || {},
+        report_data: reportData,
+        profile_snapshot: { ...(profile || {}), academic_profile: currentAcademicProfile, career_goal: currentGoal },
         skills_snapshot: skills,
         certifications_snapshot: certifications,
         courses_snapshot: courses,
@@ -70,24 +111,51 @@ const CareerReport = ({ user, profile, skills = [], certifications = [], courses
       if (reportError) throw reportError;
       setSavedReportId(reportRow.id);
 
-      const plan = payload.advice.action_plan || {};
-      const strongestPath = payload.advice.career_readiness?.strongest_path || careerRows?.[0]?.career_title || null;
+      const plan = reportData.action_plan || {};
+      const strongestPath = reportData.career_readiness?.strongest_path || currentGoal?.career_title || currentCareers?.[0]?.career_title || null;
+      const progress = {
+        '30_days': asList(plan['30_days']).map(() => false),
+        '6_months': asList(plan['6_months']).map(() => false),
+        '1_year': asList(plan['1_year']).map(() => false)
+      };
       const { error: planError } = await supabase.from('learning_plans').insert({
         user_id: user.id,
-        target_career_id: careerRows?.[0]?.career_id || null,
+        target_career_id: currentCareers?.[0]?.career_id || null,
         target_career_title: strongestPath,
         plan_30_days: { items: asList(plan['30_days']) },
         plan_6_months: { items: asList(plan['6_months']) },
         plan_1_year: { items: asList(plan['1_year']) },
-        recommended_skills: payload.advice.recommended_next_skills || [],
+        recommended_skills: reportData.recommended_next_skills || [],
         recommended_courses: [],
-        recommended_certifications: payload.advice.recommended_certifications || [],
-        ongoing_course_alignment: payload.advice.ongoing_course_alignment || [],
-        plan_data: payload.advice,
+        recommended_certifications: reportData.recommended_certifications || [],
+        ongoing_course_alignment: reportData.ongoing_course_alignment || [],
+        plan_data: { ...reportData, progress },
         status: 'active',
         updated_at: new Date().toISOString()
       });
       if (planError) throw planError;
+
+      const topCareer = currentCareers[0] || null;
+      const { error: findingError } = await supabase.from('career_findings').upsert({
+        user_id: user.id,
+        client_record_key: `report-summary:${reportRow.id}`,
+        finding_type: 'final_career_report',
+        source_type: 'career_reports',
+        source_id: reportRow.id,
+        title: strongestPath ? `Career report: ${strongestPath}` : 'Comprehensive career report',
+        status: 'active',
+        data: {
+          report_id: reportRow.id,
+          target_career: strongestPath,
+          career_match: topCareer?.match_percentage ?? topCareer?.match_score ?? null,
+          skill_gaps: topCareer?.missing_skills || [],
+          academic_subject_count: currentSubjects.length,
+          certification_count: certifications.length,
+          course_count: courses.length
+        },
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id,client_record_key' });
+      if (findingError) throw findingError;
     } catch (err) {
       console.error('Career report error:', err);
       setError(err.message || 'Could not generate and save the report.');
@@ -128,23 +196,27 @@ const CareerReport = ({ user, profile, skills = [], certifications = [], courses
         {error && <div className="m-5 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}<button onClick={fetchAdviceAndPersist} className="ml-3 rounded bg-red-100 px-3 py-1 text-sm">Retry</button></div>}
 
         {advice && <div ref={reportRef} className="overflow-y-auto bg-white p-8">
-          <div className="mb-8 border-b-2 border-indigo-600 pb-6"><h1 className="mb-2 text-4xl font-bold text-indigo-900">Skills Pathfinder</h1><p className="text-xl text-gray-600">Comprehensive Career Analysis Report</p><p className="mt-2 text-sm text-gray-500">Generated for: {profile?.full_name || user?.email} | {new Date().toLocaleDateString()}</p></div>
+          <div className="mb-8 border-b-2 border-indigo-600 pb-6"><h1 className="mb-2 text-4xl font-bold text-indigo-900">Skills Pathfinder</h1><p className="text-xl text-gray-600">Comprehensive Career Development Report</p><p className="mt-2 text-sm text-gray-500">Generated for: {profile?.full_name || user?.email} | {new Date().toLocaleDateString()}</p></div>
 
           <section className="mb-8"><h2 className="mb-3 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Executive Summary</h2><p className="text-lg leading-relaxed text-gray-700">{advice.executive_summary || 'No summary available.'}</p></section>
 
-          <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Current Profile Snapshot</h2><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><div className="rounded-lg bg-gray-50 p-4 text-center"><p className="text-3xl font-bold text-indigo-600">{skills.length}</p><p className="text-sm text-gray-600">Skills</p></div><div className="rounded-lg bg-gray-50 p-4 text-center"><p className="text-3xl font-bold text-indigo-600">{certifications.length}</p><p className="text-sm text-gray-600">Certificates</p></div><div className="rounded-lg bg-gray-50 p-4 text-center"><p className="text-3xl font-bold text-indigo-600">{courses.length}</p><p className="text-sm text-gray-600">Courses</p></div></div></section>
+          <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Student Evidence Snapshot</h2><div className="grid grid-cols-2 gap-4 md:grid-cols-5"><div className="rounded-lg bg-gray-50 p-4 text-center"><p className="text-3xl font-bold text-indigo-600">{skills.length}</p><p className="text-sm text-gray-600">Tracked Skills</p></div><div className="rounded-lg bg-gray-50 p-4 text-center"><p className="text-3xl font-bold text-indigo-600">{academicSubjects.length}</p><p className="text-sm text-gray-600">Subjects</p></div><div className="rounded-lg bg-gray-50 p-4 text-center"><p className="text-3xl font-bold text-indigo-600">{certifications.length}</p><p className="text-sm text-gray-600">Certificates</p></div><div className="rounded-lg bg-gray-50 p-4 text-center"><p className="text-3xl font-bold text-indigo-600">{courses.length}</p><p className="text-sm text-gray-600">Courses</p></div><div className="rounded-lg bg-gray-50 p-4 text-center"><p className="text-3xl font-bold text-indigo-600">{careerRows.length}</p><p className="text-sm text-gray-600">Career Matches</p></div></div></section>
 
-          {advice.career_readiness && <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Career Readiness</h2><div className="rounded-lg border bg-indigo-50 p-4"><p><strong>Current level:</strong> {advice.career_readiness.current_level || 'Not specified'}</p><p><strong>Strongest path:</strong> {advice.career_readiness.strongest_path || 'Not specified'}</p><div className="mt-3"><strong>Alternative paths</strong>{renderList(advice.career_readiness.alternative_paths)}</div><div className="mt-3"><strong>Major constraints</strong>{renderList(advice.career_readiness.major_constraints)}</div></div></section>}
+          {(academicProfile || careerGoal || academicSubjects.length > 0) && <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Academic Pathway</h2><div className="rounded-lg border bg-sky-50 p-4"><div className="grid gap-2 text-sm text-slate-700 md:grid-cols-2"><p><strong>Institution:</strong> {safeText(academicProfile?.institution)}</p><p><strong>Program:</strong> {safeText(academicProfile?.program_name)}</p><p><strong>Field of study:</strong> {safeText(academicProfile?.field_of_study)}</p><p><strong>Degree level:</strong> {safeText(academicProfile?.degree_level)}</p><p><strong>Credits earned:</strong> {Number(academicProfile?.credits_earned || 0)}</p><p><strong>Credits in progress:</strong> {Number(academicProfile?.credits_in_progress || 0)}</p><p><strong>Target career:</strong> {safeText(careerGoal?.career_title)}</p><p><strong>Target date:</strong> {safeText(careerGoal?.target_date)}</p></div>{academicSubjects.length > 0 && <div className="mt-4"><h3 className="font-bold text-slate-800">Recorded subjects</h3>{renderList(academicSubjects.map((subject) => `${subject.subject_name}${subject.credit_hours ? ` (${subject.credit_hours} credits)` : ''}${subject.status ? ` · ${subject.status}` : ''}`))}</div>}</div></section>}
 
-          {advice.swot_analysis && <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">SWOT Analysis</h2><div className="grid grid-cols-1 gap-4 md:grid-cols-2">{[['Strengths','strengths','green'],['Weaknesses','weaknesses','red'],['Opportunities','opportunities','blue'],['Threats','threats','yellow']].map(([label,key]) => <div key={key} className="rounded-lg border bg-gray-50 p-4"><h3 className="mb-2 font-bold">{label}</h3>{renderList(advice.swot_analysis[key])}</div>)}</div></section>}
+          {careerRows.length > 0 && <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Career Comparison</h2><div className="space-y-3">{careerRows.map((career, index) => <div key={career.id} className="rounded-lg border p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wide text-indigo-600">{index === 0 ? 'Leading path' : `Alternative ${index}`}</p><h3 className="text-lg font-bold text-gray-900">{career.career_title}</h3></div><span className="rounded-full bg-indigo-50 px-3 py-1 text-sm font-bold text-indigo-700">{percent(career.match_percentage ?? career.match_score)} match</span></div><div className="mt-3 grid gap-4 md:grid-cols-2"><div><p className="text-sm font-semibold text-emerald-700">Matched skills</p>{renderList(career.matched_skills, 'No matched skills saved.')}</div><div><p className="text-sm font-semibold text-amber-700">Priority gaps</p>{renderList(career.missing_skills, 'No major skill gaps saved.')}</div></div>{career.market_data?.bls?.available && <p className="mt-3 text-sm text-gray-600"><strong>Market evidence:</strong> {career.market_data.bls.occupation_title} · mean annual wage {Number(career.market_data.bls.mean_annual_wage || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} · {career.market_data.bls.source_period}</p>}</div>)}</div></section>}
 
-          <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Career Action Plan</h2><div className="space-y-5"><div className="rounded-lg border p-4"><h3 className="mb-2 font-bold text-indigo-700">Next 30 Days</h3>{renderList(advice.action_plan?.['30_days'])}</div><div className="rounded-lg border p-4"><h3 className="mb-2 font-bold text-indigo-700">Next 6 Months</h3>{renderList(advice.action_plan?.['6_months'])}</div><div className="rounded-lg border p-4"><h3 className="mb-2 font-bold text-indigo-700">Next 1 Year</h3>{renderList(advice.action_plan?.['1_year'])}</div></div></section>
+          {advice.career_readiness && <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Career Readiness</h2><div className="rounded-lg border bg-indigo-50 p-4"><p><strong>Current level:</strong> {advice.career_readiness.current_level || 'Not specified'}</p><p><strong>Strongest path:</strong> {advice.career_readiness.strongest_path || careerGoal?.career_title || 'Not specified'}</p><div className="mt-3"><strong>Alternative paths</strong>{renderList(advice.career_readiness.alternative_paths)}</div><div className="mt-3"><strong>Major constraints</strong>{renderList(advice.career_readiness.major_constraints)}</div></div></section>}
+
+          {advice.swot_analysis && <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">SWOT Analysis</h2><div className="grid grid-cols-1 gap-4 md:grid-cols-2">{[['Strengths','strengths'],['Weaknesses','weaknesses'],['Opportunities','opportunities'],['Threats','threats']].map(([label,key]) => <div key={key} className="rounded-lg border bg-gray-50 p-4"><h3 className="mb-2 font-bold">{label}</h3>{renderList(advice.swot_analysis[key])}</div>)}</div></section>}
+
+          <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Trackable Career Action Plan</h2><p className="mb-4 text-sm text-gray-500">This plan is also saved under Saved Plans, where each item can be marked complete as progress is made.</p><div className="space-y-5"><div className="rounded-lg border p-4"><h3 className="mb-2 font-bold text-indigo-700">Next 30 Days</h3>{renderList(advice.action_plan?.['30_days'])}</div><div className="rounded-lg border p-4"><h3 className="mb-2 font-bold text-indigo-700">Next 6 Months</h3>{renderList(advice.action_plan?.['6_months'])}</div><div className="rounded-lg border p-4"><h3 className="mb-2 font-bold text-indigo-700">Next 1 Year</h3>{renderList(advice.action_plan?.['1_year'])}</div></div></section>
 
           <section className="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2"><div className="rounded-lg border p-4"><h3 className="mb-2 text-lg font-bold">Next Skills</h3>{renderList(advice.recommended_next_skills)}</div><div className="rounded-lg border p-4"><h3 className="mb-2 text-lg font-bold">Recommended Certifications</h3>{renderList(advice.recommended_certifications)}</div><div className="rounded-lg border p-4"><h3 className="mb-2 text-lg font-bold">Projects</h3>{renderList(advice.recommended_projects)}</div><div className="rounded-lg border p-4"><h3 className="mb-2 text-lg font-bold">Ongoing Course Alignment</h3>{renderList((advice.ongoing_course_alignment || []).map((item) => typeof item === 'string' ? item : `${item.course || 'Course'} → ${item.career_or_skill || ''}: ${item.alignment || ''}`))}</div></section>
 
           {advice.application_readiness && <section className="mb-8"><h2 className="mb-4 border-l-4 border-indigo-600 pl-3 text-2xl font-bold">Application Readiness</h2><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-lg border bg-green-50 p-4"><h3 className="mb-2 font-bold">Can Apply Now</h3>{renderList(advice.application_readiness.can_apply_now)}</div><div className="rounded-lg border bg-amber-50 p-4"><h3 className="mb-2 font-bold">Prepare Before Applying</h3>{renderList(advice.application_readiness.prepare_before_applying)}</div></div>{advice.application_readiness.regulated_roles_note && <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-700">{advice.application_readiness.regulated_roles_note}</p>}</section>}
 
-          <div className="mt-12 border-t pt-6 text-center text-sm text-gray-500"><p>Generated by Skills Pathfinder AI • Saved to the student's account</p></div>
+          <div className="mt-12 border-t pt-6 text-center text-sm text-gray-500"><p>Generated by Skills Pathfinder AI · Saved to the student's account</p></div>
         </div>}
       </div>
     </div>
