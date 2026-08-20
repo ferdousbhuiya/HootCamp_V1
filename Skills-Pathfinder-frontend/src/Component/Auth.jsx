@@ -60,8 +60,12 @@ const Auth = ({ onAuthSuccess }) => {
   const [successMessage, setSuccessMessage] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState(initialForm);
+  const [verificationCode, setVerificationCode] = useState('');
+  const [pendingProfile, setPendingProfile] = useState(null);
+
   const isLogin = mode === 'login';
   const isReset = mode === 'reset';
+  const isVerify = mode === 'verify';
 
   const handleInputChange = (e) => {
     setFormData((current) => ({ ...current, [e.target.name]: e.target.value }));
@@ -74,33 +78,123 @@ const Auth = ({ onAuthSuccess }) => {
     setError(null);
     setSuccessMessage(null);
     setShowPassword(false);
+    if (nextMode !== 'verify') setVerificationCode('');
   };
 
   const switchMode = () => changeMode(isLogin ? 'signup' : 'login');
+
+  const saveProfile = async (userId, profile = pendingProfile || formData) => {
+    const { error: profileError } = await supabase.from('profiles').upsert({
+      id: userId,
+      full_name: profile.fullName?.trim() || null,
+      phone: profile.phone?.trim() || null,
+      address: profile.address?.trim() || null,
+      city: profile.city?.trim() || null,
+      state: profile.state?.trim() || null,
+      zip_code: profile.zipCode?.trim() || null,
+      has_completed_onboarding: false,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'id' });
+    if (profileError) throw profileError;
+  };
 
   const handleSignUp = async (e) => {
     e.preventDefault();
     setLoading(true); setError(null); setSuccessMessage(null);
     try {
+      const signupEmail = formData.email.trim();
+      const profileSnapshot = { ...formData };
       const { data, error: signUpError } = await supabase.auth.signUp({
-        email: formData.email.trim(), password: formData.password,
-        options: { data: { full_name: formData.fullName.trim() }, emailRedirectTo: `${window.location.origin}/` }
+        email: signupEmail,
+        password: formData.password,
+        options: {
+          data: {
+            full_name: formData.fullName.trim(),
+            phone: formData.phone.trim() || null,
+            city: formData.city.trim() || null,
+            state: formData.state.trim() || null
+          },
+          emailRedirectTo: `${window.location.origin}/`
+        }
       });
       if (signUpError) throw signUpError;
+
       if (data.user && !data.session) {
-        setSuccessMessage('Account created. Check your email to verify your address, then return here to sign in.');
-        setFormData(initialForm); setMode('login');
+        setPendingProfile(profileSnapshot);
+        setFormData((current) => ({ ...initialForm, email: signupEmail }));
+        setVerificationCode('');
+        setMode('verify');
+        setSuccessMessage('Account created. Verify your email using either the link in the Supabase email or the verification code shown in that email.');
       } else if (data.user && data.session) {
-        const { error: profileError } = await supabase.from('profiles').upsert({
-          id: data.user.id, full_name: formData.fullName.trim(), phone: formData.phone.trim() || null,
-          address: formData.address.trim() || null, city: formData.city.trim() || null, state: formData.state.trim() || null,
-          zip_code: formData.zipCode.trim() || null, has_completed_onboarding: false, updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
-        if (profileError) throw profileError;
+        await saveProfile(data.user.id, profileSnapshot);
         onAuthSuccess(data.user, true);
       }
-    } catch (err) { setError(err?.message || 'Account creation failed. Please try again.'); }
-    finally { setLoading(false); }
+    } catch (err) {
+      setError(err?.message || 'Account creation failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async (e) => {
+    e.preventDefault();
+    const email = formData.email.trim();
+    const token = verificationCode.trim().replace(/\s+/g, '');
+    if (!email || !token) {
+      setError('Enter the email address and verification code from the Supabase email.');
+      return;
+    }
+    setLoading(true); setError(null); setSuccessMessage(null);
+    try {
+      const { data, error: verifyError } = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: 'signup'
+      });
+      if (verifyError) throw verifyError;
+      if (!data?.user) throw new Error('Email verification completed but no user session was returned. Please sign in.');
+
+      try {
+        await saveProfile(data.user.id);
+      } catch (profileError) {
+        console.error('Email verified but profile details could not be saved:', profileError);
+      }
+
+      setPendingProfile(null);
+      setVerificationCode('');
+      if (data.session) {
+        onAuthSuccess(data.user, true);
+      } else {
+        setMode('login');
+        setSuccessMessage('Email verified successfully. You can now sign in.');
+      }
+    } catch (err) {
+      setError(err?.message || 'The verification code is invalid or expired. Request a new code and try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    const email = formData.email.trim();
+    if (!email) {
+      setError('Enter your account email before requesting another verification email.');
+      return;
+    }
+    setLoading(true); setError(null); setSuccessMessage(null);
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: 'signup',
+        email,
+        options: { emailRedirectTo: `${window.location.origin}/` }
+      });
+      if (resendError) throw resendError;
+      setSuccessMessage('A new verification email has been sent. You may use either its link or its verification code.');
+    } catch (err) {
+      setError(err?.message || 'A new verification email could not be sent. Please try again shortly.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSignIn = async (e) => {
@@ -110,8 +204,15 @@ const Auth = ({ onAuthSuccess }) => {
       const { data, error: signInError } = await supabase.auth.signInWithPassword({ email: formData.email.trim(), password: formData.password });
       if (signInError) throw signInError;
       onAuthSuccess(data.user);
-    } catch (err) { setError(err?.message || 'Sign in failed. Check your email and password and try again.'); }
-    finally { setLoading(false); }
+    } catch (err) {
+      const message = err?.message || 'Sign in failed. Check your email and password and try again.';
+      setError(message);
+      if (/email.*confirm|confirm.*email|email.*verified/i.test(message)) {
+        setMode('verify');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePasswordReset = async (e) => {
@@ -130,6 +231,9 @@ const Auth = ({ onAuthSuccess }) => {
     } finally { setLoading(false); }
   };
 
+  const panelEyebrow = isVerify ? 'Email verification' : isReset ? 'Account recovery' : isLogin ? 'Welcome back' : 'Create your student workspace';
+  const panelTitle = isVerify ? 'Verify your email' : isReset ? 'Reset your password' : isLogin ? 'Sign in to continue' : 'Start your profile';
+
   return (
     <main className="min-h-screen bg-slate-50">
       <div className="border-b border-slate-200 bg-white/90 backdrop-blur">
@@ -137,7 +241,7 @@ const Auth = ({ onAuthSuccess }) => {
           <Logo />
           <div className="hidden items-center gap-6 text-sm font-semibold text-slate-600 md:flex">
             <span>Career matching</span><span>Skill gap analysis</span><span>Learning plans</span>
-            {!isReset && <button onClick={switchMode} className="rounded-xl bg-slate-950 px-4 py-2 text-white hover:bg-indigo-700">{isLogin ? 'Create account' : 'Sign in'}</button>}
+            {!isReset && !isVerify && <button onClick={switchMode} className="rounded-xl bg-slate-950 px-4 py-2 text-white hover:bg-indigo-700">{isLogin ? 'Create account' : 'Sign in'}</button>}
           </div>
         </div>
       </div>
@@ -162,12 +266,26 @@ const Auth = ({ onAuthSuccess }) => {
 
           <div className="flex items-center justify-center lg:justify-end">
             <div className="w-full max-w-xl rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_80px_-35px_rgba(15,23,42,0.35)] sm:p-8">
-              <div className="mb-7 flex items-center justify-between gap-4"><div><p className="text-sm font-bold text-indigo-600">{isReset ? 'Account recovery' : isLogin ? 'Welcome back' : 'Create your student workspace'}</p><h2 className="mt-1 text-2xl font-extrabold tracking-tight text-slate-950">{isReset ? 'Reset your password' : isLogin ? 'Sign in to continue' : 'Start your profile'}</h2></div><div className="rounded-2xl bg-indigo-50 p-3 text-indigo-600"><svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 4 7l8 4 8-4-8-4Z"/><path d="M6 10v5c0 2 2.7 4 6 4s6-2 6-4v-5"/></svg></div></div>
+              <div className="mb-7 flex items-center justify-between gap-4"><div><p className="text-sm font-bold text-indigo-600">{panelEyebrow}</p><h2 className="mt-1 text-2xl font-extrabold tracking-tight text-slate-950">{panelTitle}</h2></div><div className="rounded-2xl bg-indigo-50 p-3 text-indigo-600"><svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 4 7l8 4 8-4-8-4Z"/><path d="M6 10v5c0 2 2.7 4 6 4s6-2 6-4v-5"/></svg></div></div>
 
               {successMessage && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">{successMessage}</div>}
               {error && <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
 
-              {isReset ? (
+              {isVerify ? (
+                <form onSubmit={handleVerifyCode} className="space-y-4">
+                  <p className="text-sm leading-6 text-slate-600">Supabase may show both a confirmation link and a verification code in the same email. Either method can verify your account. To use the code, enter it below.</p>
+                  <Input label="Email address" name="email" value={formData.email} onChange={handleInputChange} type="email" required placeholder="you@example.com" autoComplete="email" />
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-semibold text-slate-700">Verification code <span className="text-rose-500">*</span></span>
+                    <input value={verificationCode} onChange={(e) => { setVerificationCode(e.target.value.replace(/\s+/g, '')); setError(null); }} inputMode="numeric" autoComplete="one-time-code" required placeholder="Enter code from email" className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-center text-xl font-bold tracking-[0.25em] text-slate-900 shadow-sm focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100" />
+                  </label>
+                  <button disabled={loading} className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-3.5 font-bold text-white shadow-lg shadow-indigo-200 disabled:opacity-60">{loading ? 'Verifying…' : 'Verify email with code'}</button>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button type="button" disabled={loading} onClick={handleResendVerification} className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-700 disabled:opacity-60">Resend verification email</button>
+                    <button type="button" onClick={() => changeMode('login')} className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50">Back to sign in</button>
+                  </div>
+                </form>
+              ) : isReset ? (
                 <form onSubmit={handlePasswordReset} className="space-y-4">
                   <p className="text-sm leading-6 text-slate-600">Enter the email address used for your Skills Pathfinder account. We will send a secure recovery link so you can choose a new password.</p>
                   <Input label="Email address" name="email" value={formData.email} onChange={handleInputChange} type="email" required placeholder="you@example.com" autoComplete="email" />
@@ -185,7 +303,7 @@ const Auth = ({ onAuthSuccess }) => {
                 </form>
               )}
 
-              {!isReset && <div className="mt-6 border-t border-slate-200 pt-5 text-center text-sm text-slate-500">{isLogin ? 'New to Skills Pathfinder?' : 'Already have an account?'}{' '}<button onClick={switchMode} className="font-bold text-indigo-600 hover:text-indigo-800">{isLogin ? 'Create an account' : 'Sign in'}</button></div>}
+              {!isReset && !isVerify && <div className="mt-6 border-t border-slate-200 pt-5 text-center text-sm text-slate-500">{isLogin ? 'New to Skills Pathfinder?' : 'Already have an account?'}{' '}<button onClick={switchMode} className="font-bold text-indigo-600 hover:text-indigo-800">{isLogin ? 'Create an account' : 'Sign in'}</button></div>}
               <p className="mt-5 text-center text-xs leading-5 text-slate-400">Career guidance is informational. Regulated professions can require specific education, examinations, licensing, or supervised experience.</p>
             </div>
           </div>
