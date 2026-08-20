@@ -81,7 +81,6 @@ const StudentCareerDashboard = ({ user, onAnalyzeResume, onOpenCareerIntelligenc
         setCertifications(certsResult.data || []);
         setCourses(coursesResult.data || []);
 
-        // Academic pathway tables are optional until the new migration is applied.
         const [academicResult, subjectsResult, goalResult] = await Promise.all([
           supabase.from('academic_profiles').select('*').eq('user_id', user.id).maybeSingle(),
           supabase.from('academic_subjects').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
@@ -100,10 +99,6 @@ const StudentCareerDashboard = ({ user, onAnalyzeResume, onOpenCareerIntelligenc
     loadDashboard();
     return () => { active = false; };
   }, [user?.id, showAcademic]);
-
-  if (showAcademic) {
-    return <AcademicPathways user={user} onOpenCareerIntelligence={onOpenCareerIntelligence} />;
-  }
 
   const latestAnalysis = analyses[0] || null;
   const recommendations = Array.isArray(latestAnalysis?.recommendations) ? latestAnalysis.recommendations : [];
@@ -144,6 +139,10 @@ const StudentCareerDashboard = ({ user, onAnalyzeResume, onOpenCareerIntelligenc
       readiness: clamp(Math.round(match * 0.6 + evidenceStrength * 0.2 + learningProgress * 0.12 + academicCoverage * 0.08))
     };
   });
+
+  if (showAcademic) {
+    return <AcademicPathways user={user} onOpenCareerIntelligence={onOpenCareerIntelligence} onBack={() => setShowAcademic(false)} />;
+  }
 
   if (loading) return <div className="app-card flex min-h-[420px] items-center justify-center p-8"><div className="text-center"><div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-teal-100 border-t-teal-600" /><p className="mt-4 text-sm font-medium text-slate-500">Building your career dashboard…</p></div></div>;
   if (error) return <div className="app-card border-rose-200 p-6"><p className="font-semibold text-rose-800">Dashboard data could not be loaded.</p><p className="mt-1 text-sm text-rose-700">{error}</p><button onClick={onAnalyzeResume} className="app-button-secondary mt-4">Continue to profile entry</button></div>;
