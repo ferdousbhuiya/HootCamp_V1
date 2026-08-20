@@ -26,6 +26,9 @@ RUN npm run build
 # ---- Stage 2: serve with nginx ----
 FROM nginx:1.27-alpine
 
+# Coolify's Dockerfile healthcheck runner requires curl or wget in the image.
+RUN apk add --no-cache curl
+
 # Proxy target for /api/*. Coolify joins services on its default docker
 # network; override at runtime if the backend lives on a different network.
 ENV API_UPSTREAM=http://backend:8000
