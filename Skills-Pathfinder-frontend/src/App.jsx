@@ -5,7 +5,7 @@ import UserDashboard from './Component/UserDashboard';
 import UploadComponent from './Component/UploadComponent';
 import SkillDashboard from './Component/SkillDashboard';
 import CareerRecommendations from './Component/CareerRecommendations';
-import OnboardingWizard from './Component/OnboardingWizard';
+import OnboardingWizardV2 from './Component/OnboardingWizardV2';
 import CareerAdvisor from './Component/CareerAdvisor';
 import SavedCareerHistory from './Component/SavedCareerHistory';
 import StudentCareerDashboard from './Component/StudentCareerDashboard';
@@ -383,7 +383,7 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  if (showOnboarding && user) return <OnboardingWizard user={user} onComplete={handleOnboardingComplete} onCancel={handleOnboardingCancel} />;
+  if (showOnboarding && user) return <OnboardingWizardV2 user={user} onComplete={handleOnboardingComplete} onCancel={handleOnboardingCancel} />;
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="animate-spin rounded-full h-14 w-14 border-4 border-teal-100 border-t-teal-600" /></div>;
   if (!user) return <Auth onAuthSuccess={handleAuthSuccess} />;
 
