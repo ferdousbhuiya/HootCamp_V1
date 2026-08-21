@@ -304,6 +304,81 @@ Return ONLY JSON:
     return {"status": "success", "advisor": json.loads(response)}
 
 
+class TargetCareerRequest(BaseModel):
+    career_title: str = Field(min_length=2, max_length=180)
+    skills: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+CAREER_TITLE_ALIASES = {
+    "nurse": "registered nurse",
+    "rn": "registered nurse",
+    "nursing": "registered nurse",
+    "registered nursing": "registered nurse",
+    "software engineer": "software developer",
+    "programmer": "software developer",
+    "cyber security analyst": "cybersecurity analyst",
+    "security analyst": "cybersecurity analyst",
+    "data analysis": "data analyst",
+    "business analytics": "business analyst",
+    "medical laboratory scientist": "medical laboratory technologist",
+    "medical lab scientist": "medical laboratory technologist",
+    "educator": "teacher",
+}
+
+
+def _normalize_career_title(value: str) -> str:
+    text = str(value or "").strip().lower().replace("&", " and ")
+    text = re.sub(r"[^a-z0-9+#./ -]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .-/")
+    return CAREER_TITLE_ALIASES.get(text, text)
+
+
+def _find_target_career(title: str):
+    normalized = _normalize_career_title(title)
+    for career in recommendation_module.CAREER_PATHS:
+        if _normalize_career_title(career.get("path", "")) == normalized:
+            return career
+        if _normalize_career_title(career.get("id", "").replace("_", " ")) == normalized:
+            return career
+    return None
+
+
+async def target_career_analysis(request: TargetCareerRequest):
+    """Score an explicitly selected target even when its current score is below recommendation threshold."""
+    target = _find_target_career(request.career_title)
+    if not target:
+        return {
+            "status": "success",
+            "target_found": False,
+            "career_title": request.career_title,
+            "recommendation": None,
+            "message": "The selected target is not yet mapped in the local career catalog. General career matches are still available.",
+        }
+
+    scoring = recommendation_module._score_career(request.skills, target)
+    recommendation = {
+        "id": target["id"],
+        "path": target["path"],
+        "category": target.get("category"),
+        **scoring,
+        "job_outlook": target.get("job_outlook"),
+        "median_salary": target.get("median_salary"),
+        "top_locations": target.get("top_locations") or [],
+        "recommended_certifications": target.get("recommended_certifications") or [],
+        "recommended_degrees": target.get("recommended_degrees") or [],
+        "next_steps": target.get("next_steps") or [],
+        "learning_resources": target.get("learning_resources") or [],
+        "regulated_role": bool(target.get("regulated_role")),
+        "target_selected": True,
+    }
+    return {
+        "status": "success",
+        "target_found": True,
+        "career_title": request.career_title,
+        "recommendation": recommendation,
+    }
+
+
 async def market_data(career_title: str = Query(..., min_length=2, max_length=180)):
     return {"status": "success", "market_data": get_market_intelligence(career_title)}
 
@@ -323,6 +398,7 @@ def _remove_route(path: str, method: str):
 _remove_route("/api/verify-certificate", "POST")
 _remove_route("/api/generate-career-advice", "POST")
 _remove_route("/api/career-advisor", "POST")
+_remove_route("/api/target-career-analysis", "POST")
 _remove_route("/api/market-data", "GET")
 _remove_route("/health", "GET")
 
@@ -330,6 +406,7 @@ main_module.app.add_api_route("/api/verify-certificate", verify_certificate_v2, 
 main_module.app.add_api_route("/api/verify-certificate-link", verify_certificate_link, methods=["POST"], tags=["certificates"])
 main_module.app.add_api_route("/api/generate-career-advice", generate_career_advice_v2, methods=["POST"], tags=["career"])
 main_module.app.add_api_route("/api/career-advisor", career_advisor, methods=["POST"], tags=["career"])
+main_module.app.add_api_route("/api/target-career-analysis", target_career_analysis, methods=["POST"], tags=["career"])
 main_module.app.add_api_route("/api/market-data", market_data, methods=["GET"], tags=["market"])
 main_module.app.add_api_route("/health", health_check, methods=["GET"], tags=["system"], include_in_schema=False)
 
