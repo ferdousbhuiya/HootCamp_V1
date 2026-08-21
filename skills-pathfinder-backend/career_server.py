@@ -1,17 +1,19 @@
-"""Dynamic career blueprint layer for Skills Pathfinder.
+"""Open-career production layer for Skills Pathfinder.
 
-This module sits on top of the production server and keeps the existing API
-intact while adding a generalized target-career pathway for occupations that
-are not preloaded in the local catalog.
+The local catalog is a trusted shortcut, not a restriction. Any legitimate
+student-selected occupation can receive an AI-generated structured blueprint,
+explainable readiness score, academic preparation suggestions, and action plan.
 """
 
 import json
 import re
 from typing import Any, Dict, List
 
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 import recommendation_engine as recommendation_module
+from career_blueprint_service import recommendation_from_blueprint, sanitize_blueprint, score_blueprint
 from server import app, resilient_llm_generate
 
 
@@ -36,6 +38,8 @@ CAREER_TITLE_ALIASES = {
     "educator": "teacher",
 }
 
+# In-process cache avoids repeat AI calls during a deployment. The frontend also
+# persists student-specific blueprints in career_findings for durable reuse.
 _BLUEPRINT_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
@@ -44,10 +48,6 @@ def _normalize_title(value: str) -> str:
     text = re.sub(r"[^a-z0-9+#./ -]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip(" .-/")
     return CAREER_TITLE_ALIASES.get(text, text)
-
-
-def _slug(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", _normalize_title(value)).strip("_") or "career_target"
 
 
 def _find_known_career(title: str):
@@ -60,150 +60,140 @@ def _find_known_career(title: str):
     return None
 
 
-def _fallback_blueprint(title: str, known: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    path = (known or {}).get("path") or title.strip()
-    required = list((known or {}).get("required_skills") or [])
-    subjects = [
-        {"name": skill, "reason": f"Builds foundational knowledge or competency related to {skill}."}
-        for skill in required[:5]
-    ]
+def _known_context(career):
+    if not career:
+        return None
     return {
-        "canonical_title": path,
-        "category": (known or {}).get("category") or "Career pathway",
-        "career_summary": f"Career pathway guidance for {path}.",
-        "regulated_role": bool((known or {}).get("regulated_role")),
-        "regulation_note": "Verify current licensing, certification, education, medical, or legal requirements with the appropriate official authority before making regulated-career decisions." if (known or {}).get("regulated_role") else "No regulated-role determination was verified by this fallback profile.",
-        "core_competencies": required,
-        "recommended_subjects": subjects,
-        "education_or_training_pathway": [item.get("name") for item in (known or {}).get("recommended_degrees", []) if item.get("name")],
-        "credentials_or_licenses": [
-            {"name": item.get("name"), "note": f"Provider: {item.get('provider') or 'not specified'}", "official_verification_required": True}
-            for item in (known or {}).get("recommended_certifications", []) if item.get("name")
-        ],
-        "30_day_actions": list((known or {}).get("next_steps") or [])[:3],
-        "6_month_actions": [],
-        "1_year_actions": [],
-        "source_type": "local_catalog_fallback" if known else "general_fallback",
-        "requires_official_verification": bool((known or {}).get("regulated_role")) or not bool(known),
+        "id": career.get("id"),
+        "path": career.get("path"),
+        "category": career.get("category"),
+        "required_skills": career.get("required_skills") or [],
+        "regulated_role": bool(career.get("regulated_role")),
+        "recommended_degrees": career.get("recommended_degrees") or [],
+        "recommended_certifications": career.get("recommended_certifications") or [],
+        "next_steps": career.get("next_steps") or [],
     }
 
 
-async def _generate_blueprint(title: str) -> Dict[str, Any]:
+def _compatibility_fields(blueprint: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep field names used by earlier frontend builds while using V2 schema."""
+    output = dict(blueprint)
+    output["category"] = output.get("career_category") or output.get("category") or "Career pathway"
+    output["credentials_or_licenses"] = [
+        {"name": item, "note": "Verify current requirements with the appropriate official or recognized authority.", "official_verification_required": bool(output.get("regulated_role"))}
+        for item in output.get("credentials_or_licensing_areas", [])
+    ]
+    output["30_day_actions"] = output.get("actions_30_days", [])
+    output["6_month_actions"] = output.get("actions_6_months", [])
+    output["1_year_actions"] = output.get("actions_1_year", [])
+    output["requires_official_verification"] = bool(output.get("official_verification_required"))
+    return output
+
+
+async def _generate_blueprint(title: str, skills: List[Dict[str, Any]]) -> Dict[str, Any]:
     cache_key = _normalize_title(title)
-    if cache_key in _BLUEPRINT_CACHE:
-        return _BLUEPRINT_CACHE[cache_key]
+    cached = _BLUEPRINT_CACHE.get(cache_key)
+    if cached:
+        return cached
 
     known = _find_known_career(title)
-    known_context = {
-        "path": known.get("path"),
-        "category": known.get("category"),
-        "required_skills": known.get("required_skills") or [],
-        "recommended_certifications": known.get("recommended_certifications") or [],
-        "recommended_degrees": known.get("recommended_degrees") or [],
-        "next_steps": known.get("next_steps") or [],
-        "regulated_role": bool(known.get("regulated_role")),
-    } if known else None
+    context = _known_context(known)
+    evidence_labels = [
+        str(item.get("name") or item.get("skill_name") or "").strip()
+        for item in skills[:120]
+        if isinstance(item, dict) and (item.get("name") or item.get("skill_name"))
+    ]
 
     prompt = f"""
-Build a structured career-development blueprint for the target occupation below.
-The blueprint must work for any legitimate occupation, including careers outside
-technology, business, healthcare, or engineering.
+Create a structured career-development blueprint for the student's exact target career.
+Skills Pathfinder must support any legitimate occupation or professional goal. Do not
+force the target into a predefined technology, business, healthcare, or engineering list.
 
-TARGET CAREER: {title}
-LOCAL CATALOG CONTEXT: {json.dumps(known_context)}
+REQUESTED CAREER: {title}
+KNOWN LOCAL CATALOG CONTEXT, IF ANY: {json.dumps(context)}
+CURRENT STUDENT EVIDENCE LABELS, FOR CONTEXT ONLY: {json.dumps(evidence_labels[:80])}
 
 Rules:
-- Normalize the title to a clear common occupation title.
-- Do not require the student to already match the career. This is a target pathway.
-- Provide 5-8 core competencies that can later be compared with student evidence.
-- Provide 4-6 sensible academic subjects or learning areas and explain why each helps.
-- Separate academic subjects from professional training, licenses, certificates, flight/clinical hours, apprenticeships, or other regulated requirements.
-- Be conservative about regulated careers. Do not invent exact legal, licensing, medical, flight-hour, state, or exam requirements. When a requirement depends on jurisdiction or current regulation, say that official verification is required.
-- If LOCAL CATALOG CONTEXT is present, preserve its known regulated-role status and do not contradict its core pathway.
-- Do not include salary claims in this blueprint.
-- Keep action plans practical for a student or career changer.
+- Normalize the career title while preserving the student's intent.
+- If local context provides required_skills, keep those as the core competencies.
+- For an uncatalogued career, identify 5-10 practical core occupational competencies.
+- For every core competency provide genuine evidence keywords/equivalents that could
+  support it. Do not use loosely related buzzwords.
+- Give 5-10 academic subjects or learning areas that can prepare a student for the career.
+  These are guidance, not claims about a particular university curriculum.
+- Include broad domain_relevance_keywords for early evidence such as foundational subjects
+  or field names. Broad domain evidence must not be treated as occupational competence.
+- Separate education/training, professional credentials/licensing, and experience evidence.
+- For regulated careers, set regulated_role=true. Do not invent exact legal requirements,
+  flight/clinical hours, admission rules, statutory thresholds, or jurisdiction-specific
+  requirements. Tell the student to verify current requirements with the official authority.
+- Do not include salary claims here.
+- Actions must be useful to a beginning student, career changer, or experienced learner.
 
-Return ONLY JSON in this structure:
+Return ONLY JSON:
 {{
   "canonical_title": "",
-  "category": "",
+  "career_category": "",
   "career_summary": "",
   "regulated_role": false,
   "regulation_note": "",
   "core_competencies": [""],
-  "recommended_subjects": [{{"name": "", "reason": ""}}],
+  "competency_evidence_map": [{{"competency":"","evidence_keywords":[""]}}],
+  "domain_relevance_keywords": [""],
+  "recommended_subjects": [{{"name":"","reason":""}}],
   "education_or_training_pathway": [""],
-  "credentials_or_licenses": [{{"name": "", "note": "", "official_verification_required": true}}],
-  "30_day_actions": [""],
-  "6_month_actions": [""],
-  "1_year_actions": [""],
-  "requires_official_verification": false
+  "credentials_or_licensing_areas": [""],
+  "experience_or_portfolio_evidence": [""],
+  "actions_30_days": [""],
+  "actions_6_months": [""],
+  "actions_1_year": [""]
 }}
 """
 
     try:
-        response = await resilient_llm_generate(prompt, max_tokens_override=1800)
-        blueprint = json.loads(response)
-        blueprint["canonical_title"] = str(blueprint.get("canonical_title") or (known or {}).get("path") or title).strip()
-        blueprint["category"] = str(blueprint.get("category") or (known or {}).get("category") or "Career pathway").strip()
-        blueprint["core_competencies"] = [str(item).strip() for item in blueprint.get("core_competencies", []) if str(item).strip()][:10]
-        subjects = []
-        for item in blueprint.get("recommended_subjects", [])[:8]:
-            if isinstance(item, dict) and str(item.get("name") or "").strip():
-                subjects.append({"name": str(item.get("name")).strip(), "reason": str(item.get("reason") or "Supports preparation for this target career.").strip()})
-        blueprint["recommended_subjects"] = subjects
-        if known and known.get("regulated_role"):
-            blueprint["regulated_role"] = True
-            blueprint["requires_official_verification"] = True
-        blueprint["source_type"] = "ai_blueprint_with_local_catalog" if known else "ai_dynamic_blueprint"
-        if not blueprint["core_competencies"]:
-            blueprint = _fallback_blueprint(title, known)
+        response = await resilient_llm_generate(prompt, max_tokens_override=2200)
+        raw = json.loads(response)
+        blueprint = sanitize_blueprint(raw, title, known)
     except Exception as exc:
-        print(f"[CAREER BLUEPRINT] Dynamic generation failed for {title}: {exc}")
-        blueprint = _fallback_blueprint(title, known)
+        print(f"[CAREER BLUEPRINT] AI generation failed for {title}: {exc}")
+        if not known:
+            raise HTTPException(status_code=502, detail="Could not prepare this career blueprint right now. Please retry shortly.")
+        fallback = {
+            "canonical_title": known.get("path") or title,
+            "career_category": known.get("category") or "Career pathway",
+            "career_summary": f"Preparation pathway for {known.get('path') or title}.",
+            "regulated_role": bool(known.get("regulated_role")),
+            "regulation_note": "Verify current official requirements with the relevant authority." if known.get("regulated_role") else "",
+            "core_competencies": known.get("required_skills") or [],
+            "competency_evidence_map": [],
+            "domain_relevance_keywords": [],
+            "recommended_subjects": [],
+            "education_or_training_pathway": [item.get("name") for item in (known.get("recommended_degrees") or []) if isinstance(item, dict) and item.get("name")],
+            "credentials_or_licensing_areas": [item.get("name") for item in (known.get("recommended_certifications") or []) if isinstance(item, dict) and item.get("name")],
+            "experience_or_portfolio_evidence": [],
+            "actions_30_days": known.get("next_steps") or [],
+            "actions_6_months": [],
+            "actions_1_year": [],
+        }
+        blueprint = sanitize_blueprint(fallback, title, known)
 
+    blueprint = _compatibility_fields(blueprint)
     _BLUEPRINT_CACHE[cache_key] = blueprint
     return blueprint
 
 
-def _recommendation_from_blueprint(blueprint: Dict[str, Any], skills: List[Dict[str, Any]]) -> Dict[str, Any]:
-    required = blueprint.get("core_competencies") or []
-    score, matched, missing = recommendation_module.calculate_match_score(skills, required)
-    match_percentage = round(score * 100, 1)
-    skill_gap_percentage = round((1 - score) * 100, 1) if required else 100.0
-    if matched:
-        reason = f"Your saved evidence currently supports {len(matched)} of {len(required)} core competencies for this selected target."
-    else:
-        reason = "This is your selected career target. Current evidence does not yet demonstrate the mapped core competencies, so the pathway focuses on what to build next."
-    return {
-        "id": f"target_{_slug(blueprint.get('canonical_title') or 'career')}",
-        "path": blueprint.get("canonical_title"),
-        "category": blueprint.get("category"),
-        "match_score": score,
-        "match_percentage": match_percentage,
-        "skill_gap_percentage": skill_gap_percentage,
-        "matched_skills": matched,
-        "missing_skills": missing,
-        "match_reason": reason,
-        "recommended_certifications": blueprint.get("credentials_or_licenses") or [],
-        "recommended_degrees": [{"name": item, "type": "Education or training pathway"} for item in blueprint.get("education_or_training_pathway", [])],
-        "next_steps": (blueprint.get("30_day_actions") or []) + (blueprint.get("6_month_actions") or [])[:2],
-        "learning_resources": [],
-        "regulated_role": bool(blueprint.get("regulated_role")),
-        "target_selected": True,
-        "dynamic_blueprint": True,
-        "career_blueprint": blueprint,
-    }
-
-
 async def career_blueprint(request: CareerBlueprintRequest):
-    blueprint = await _generate_blueprint(request.career_title)
-    recommendation = _recommendation_from_blueprint(blueprint, request.skills)
+    blueprint = await _generate_blueprint(request.career_title, request.skills)
+    readiness = score_blueprint(request.skills, blueprint)
+    recommendation = recommendation_from_blueprint(blueprint, readiness)
+    # Preserve older field name inside recommendation for downstream UI/report code.
+    recommendation["career_blueprint"] = blueprint
     return {
         "status": "success",
         "target_found": True,
         "career_title": request.career_title,
         "blueprint": blueprint,
+        "readiness": readiness,
         "recommendation": recommendation,
     }
 
@@ -212,7 +202,7 @@ async def target_career_analysis(request: CareerBlueprintRequest):
     return await career_blueprint(request)
 
 
-# Replace the earlier catalog-only target route with the generalized blueprint route.
+# Replace the earlier catalog-only target route with the generalized route.
 app.router.routes = [
     route for route in app.router.routes
     if not (
