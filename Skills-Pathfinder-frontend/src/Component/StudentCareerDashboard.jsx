@@ -1,3 +1,3 @@
-import StudentCareerDashboardV3 from './StudentCareerDashboardV3';
+import StudentCareerDashboardV4 from './StudentCareerDashboardV4';
 
-export default StudentCareerDashboardV3;
+export default StudentCareerDashboardV4;
