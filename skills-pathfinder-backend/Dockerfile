@@ -31,6 +31,6 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-# career_server.py layers generalized target-career blueprints on top of the
-# stable production server without changing the existing API contracts.
-CMD ["uvicorn", "career_server:app", "--host", "0.0.0.0", "--port", "8000"]
+# runtime_server.py loads the generalized open-career API and installs the
+# narrow production skill-quality patch before serving requests.
+CMD ["uvicorn", "runtime_server:app", "--host", "0.0.0.0", "--port", "8000"]
