@@ -1,3 +1,3 @@
-import AcademicPathwaysV3 from './AcademicPathwaysV3';
+import AcademicPathwaysV4 from './AcademicPathwaysV4';
 
-export default AcademicPathwaysV3;
+export default AcademicPathwaysV4;
