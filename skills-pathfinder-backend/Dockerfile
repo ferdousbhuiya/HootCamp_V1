@@ -31,6 +31,6 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-# server.py wires the recommendation engine explicitly and supplies resilient
-# JSON handling for Groq gpt-oss while reusing the existing FastAPI app/routes.
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+# career_server.py layers generalized target-career blueprints on top of the
+# stable production server without changing the existing API contracts.
+CMD ["uvicorn", "career_server:app", "--host", "0.0.0.0", "--port", "8000"]
