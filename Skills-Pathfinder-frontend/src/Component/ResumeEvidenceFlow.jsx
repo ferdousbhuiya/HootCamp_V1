@@ -8,9 +8,7 @@ const safe = (value) => Array.isArray(value) ? value : [];
 const norm = (value = '') => String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const degreePattern = /\b(ph\.?d|doctor|master|m\.?s\.?|m\.?sc|mba|bachelor|b\.?s\.?|b\.?sc|associate|a\.?s\.?)\b/i;
 
-const EvidenceList = ({ items, render }) => items.length
-  ? <div className="mt-3 space-y-3">{items.map((item, index) => <div key={index} className="rounded-xl border border-slate-200 bg-white p-4">{render(item, index)}</div>)}</div>
-  : <p className="mt-2 text-sm text-slate-500">Nothing detected in this section.</p>;
+const EvidenceList = ({ items, render }) => <div className="mt-3 space-y-3">{items.map((item, index) => <div key={index} className="rounded-xl border border-slate-200 bg-white p-4">{render(item, index)}</div>)}</div>;
 
 const ResumeEvidenceFlow = ({ user, onComplete, onCancel, onOpenCareerIntelligence }) => {
   const [resume, setResume] = useState(null);
@@ -44,15 +42,21 @@ const ResumeEvidenceFlow = ({ user, onComplete, onCancel, onOpenCareerIntelligen
 
   const formalEducation = useMemo(() => rawEducation.filter((item) => degreePattern.test(`${item?.program_or_degree || ''} ${item?.field_of_study || ''}`)), [rawEducation]);
   const educationTraining = useMemo(() => rawEducation.filter((item) => !formalEducation.includes(item)), [rawEducation, formalEducation]);
+  const formalInstitutions = useMemo(() => new Set(formalEducation.map((item) => norm(item?.institution)).filter(Boolean)), [formalEducation]);
+  const academicSubjects = useMemo(() => rawCourses.filter((item) => {
+    const provider = norm(item?.institution_or_provider || item?.institution);
+    return item?.course_type === 'academic_subject' || item?.type === 'academic_subject' || (provider && formalInstitutions.has(provider));
+  }), [rawCourses, formalInstitutions]);
   const training = useMemo(() => {
+    const academicKeys = new Set(academicSubjects.map((item) => norm(item?.program_or_degree || item?.name)).filter(Boolean));
     const seen = new Set();
     return [...educationTraining, ...rawCourses].filter((item) => {
       const key = norm(item?.program_or_degree || item?.name);
-      if (!key || seen.has(key)) return false;
+      if (!key || academicKeys.has(key) || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-  }, [educationTraining, rawCourses]);
+  }, [educationTraining, rawCourses, academicSubjects]);
 
   const professionalEvidence = useMemo(() => {
     const trainingKeys = new Set(training.map((item) => norm(item?.program_or_degree || item?.name)));
@@ -80,15 +84,16 @@ const ResumeEvidenceFlow = ({ user, onComplete, onCancel, onOpenCareerIntelligen
     return derived.slice(0, 8);
   }, [rawProjects, experience]);
 
-  const summary = useMemo(() => ({
-    skills: skills.length,
-    formalEducation: formalEducation.length,
-    training: training.length,
-    experience: experience.length,
-    projects: projectAccomplishments.length,
-    publications: publications.length,
-    recommendations: recommendations.length
-  }), [skills, formalEducation, training, experience, projectAccomplishments, publications, recommendations]);
+  const summaryCards = useMemo(() => [
+    ['Skills', skills.length],
+    ['Formal education', formalEducation.length],
+    ['Academic subjects', academicSubjects.length],
+    ['Professional training', training.length],
+    ['Work roles', experience.length],
+    ['Project accomplishments', projectAccomplishments.length],
+    ['Publications', publications.length],
+    ['Career matches', recommendations.length]
+  ].filter(([, value]) => Number(value) > 0), [skills, formalEducation, academicSubjects, training, experience, projectAccomplishments, publications, recommendations]);
 
   const saveSkill = async (skill, analysisId) => {
     if (!skill?.name || String(skill.name).trim().length < 2) return;
@@ -168,7 +173,7 @@ const ResumeEvidenceFlow = ({ user, onComplete, onCancel, onOpenCareerIntelligen
       for (const skill of safe(result.extracted_skills)) await saveSkill(skill, analysis.id);
       await saveEducation(safe(result.education), analysis.id);
       setResume({ ...result, saved_analysis_id: analysis.id });
-      setNotice('Resume analyzed and saved. Review every evidence section below before opening Career Intelligence.');
+      setNotice('Resume analyzed and saved. Review the evidence below before exploring Career Intelligence.');
     } catch (err) { setError(err.message || 'Resume could not be analyzed.'); }
     finally { setUploading(false); event.target.value = ''; }
   };
@@ -189,38 +194,36 @@ const ResumeEvidenceFlow = ({ user, onComplete, onCancel, onOpenCareerIntelligen
     <section className="rounded-3xl bg-slate-950 p-7 text-white shadow-xl">
       <p className="text-xs font-bold uppercase tracking-[.18em] text-teal-300">Resume Evidence Builder</p>
       <h1 className="mt-2 text-3xl font-black">Resume → evidence review → Career Intelligence</h1>
-      <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">Review skills, formal education, completed training, work history, total experience, project accomplishments and publications before opening Career Intelligence.</p>
+      <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">Review the evidence found in your resume. Only categories with detected evidence are shown.</p>
       <button onClick={onCancel} className="mt-5 rounded-xl border border-white/20 px-4 py-2 text-sm font-bold">Save & exit</button>
     </section>
 
     {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">{notice}</div>}
     {error && <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
 
-    <section className="app-card p-6"><h2 className="text-2xl font-black">1. Upload resume</h2><p className="mt-2 text-sm text-slate-600">Upload one resume. Re-upload only when you intentionally want a new analysis.</p><label className="mt-5 block cursor-pointer rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50 p-7 text-center"><b>{uploading ? 'Analyzing…' : 'Choose resume'}</b><input disabled={uploading} type="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" onChange={uploadResume} className="sr-only" /></label></section>
+    <section className="app-card p-6"><h2 className="text-2xl font-black">1. Upload resume</h2><p className="mt-2 text-sm text-slate-600">Upload a new resume only when you intentionally want a new analysis. Your latest saved review remains available.</p><label className="mt-5 block cursor-pointer rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50 p-7 text-center"><b>{uploading ? 'Analyzing…' : 'Choose resume'}</b><input disabled={uploading} type="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" onChange={uploadResume} className="sr-only" /></label></section>
 
     {resume && <>
       <section className="app-card p-6"><h2 className="text-2xl font-black">2. Evidence summary</h2><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-        {[
-          ['Skills', summary.skills], ['Formal education', summary.formalEducation], ['Training', summary.training], ['Work roles', summary.experience],
-          ['Project accomplishments', summary.projects], ['Publications', summary.publications], ['Career matches', summary.recommendations]
-        ].map(([label,value]) => <div key={label} className="rounded-xl bg-slate-50 p-4"><p className="text-xs font-bold uppercase text-slate-500">{label}</p><p className="mt-1 text-3xl font-black">{value}</p></div>)}
-        <div className="rounded-xl border border-teal-200 bg-teal-50 p-4"><p className="text-xs font-bold uppercase text-teal-700">Experience</p><p className="mt-1 text-3xl font-black text-teal-950">{totalYears ? `${totalYears}y` : 'N/A'}</p></div>
+        {summaryCards.map(([label,value]) => <div key={label} className="rounded-xl bg-slate-50 p-4"><p className="text-xs font-bold uppercase text-slate-500">{label}</p><p className="mt-1 text-3xl font-black">{value}</p></div>)}
+        {totalYears > 0 && <div className="rounded-xl border border-teal-200 bg-teal-50 p-4"><p className="text-xs font-bold uppercase text-teal-700">Experience</p><p className="mt-1 text-3xl font-black text-teal-950">{totalYears}y</p></div>}
       </div></section>
 
-      <section className="app-card p-6"><h2 className="text-xl font-black">Skills</h2><p className="mt-1 text-sm text-slate-500">All evidence-backed skills are preserved. Equivalent skills are normalized only during career scoring.</p><div className="mt-3 flex flex-wrap gap-2">{skills.map((skill,index)=><span key={`${skill.name}-${index}`} title={skill.evidence || ''} className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-800">{skill.name}</span>)}</div></section>
+      {skills.length>0&&<section className="app-card p-6"><h2 className="text-xl font-black">Skills</h2><p className="mt-1 text-sm text-slate-500">All evidence-backed skills are preserved. Equivalent skills are normalized only during career scoring.</p><div className="mt-3 flex flex-wrap gap-2">{skills.map((skill,index)=><span key={`${skill.name}-${index}`} title={skill.evidence || ''} className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-800">{skill.name}</span>)}</div></section>}
 
-      <section className="app-card p-6"><h2 className="text-xl font-black">Formal education</h2><EvidenceList items={formalEducation} render={educationCard} /></section>
-      <section className="app-card p-6"><h2 className="text-xl font-black">Completed training & courses</h2><EvidenceList items={training} render={educationCard} /></section>
+      {formalEducation.length>0&&<section className="app-card p-6"><h2 className="text-xl font-black">Formal education</h2><EvidenceList items={formalEducation} render={educationCard} /></section>}
+      {academicSubjects.length>0&&<section className="app-card p-6"><h2 className="text-xl font-black">Academic subjects & coursework</h2><p className="mt-1 text-sm text-slate-500">Coursework associated with formal education is kept separate from professional training.</p><EvidenceList items={academicSubjects} render={educationCard} /></section>}
+      {training.length>0&&<section className="app-card p-6"><h2 className="text-xl font-black">Completed professional training</h2><EvidenceList items={training} render={educationCard} /></section>}
 
-      <section className="app-card p-6"><h2 className="text-xl font-black">Work experience</h2><EvidenceList items={experience} render={(item)=><><p className="font-bold">{item.role || 'Role not detected'}</p><p className="text-sm text-slate-600">{item.employer || 'Employer not detected'} · {item.start_date || '?'} to {item.end_date || '?'}</p>{safe(item.responsibilities).length>0&&<ul className="mt-2 list-disc pl-5 text-sm text-slate-600">{safe(item.responsibilities).slice(0,5).map((x,i)=><li key={i}>{x}</li>)}</ul>}</>} /></section>
+      {experience.length>0&&<section className="app-card p-6"><h2 className="text-xl font-black">Work experience</h2><EvidenceList items={experience} render={(item)=><><p className="font-bold">{item.role || 'Role not detected'}</p><p className="text-sm text-slate-600">{item.employer || 'Employer not detected'} · {item.start_date || '?'} to {item.end_date || '?'}</p>{safe(item.responsibilities).length>0&&<ul className="mt-2 list-disc pl-5 text-sm text-slate-600">{safe(item.responsibilities).slice(0,5).map((x,i)=><li key={i}>{x}</li>)}</ul>}</>} /></section>}
 
-      <section className="app-card p-6"><h2 className="text-xl font-black">Project accomplishments</h2><p className="mt-1 text-sm text-slate-500">Includes explicit projects and substantial project work described inside employment history.</p><EvidenceList items={projectAccomplishments} render={(item)=><><p className="font-bold">{item.name || 'Project accomplishment'}</p>{item.employer&&<p className="text-xs font-semibold uppercase text-slate-400">{item.employer}</p>}<p className="mt-1 text-sm text-slate-600">{item.description || item.evidence || 'Project evidence detected.'}</p></>} /></section>
+      {projectAccomplishments.length>0&&<section className="app-card p-6"><h2 className="text-xl font-black">Project accomplishments</h2><p className="mt-1 text-sm text-slate-500">Includes explicit projects and substantial project work described inside employment history.</p><EvidenceList items={projectAccomplishments} render={(item)=><><p className="font-bold">{item.name || 'Project accomplishment'}</p>{item.employer&&<p className="text-xs font-semibold uppercase text-slate-400">{item.employer}</p>}<p className="mt-1 text-sm text-slate-600">{item.description || item.evidence || 'Project evidence detected.'}</p></>} /></section>}
 
-      <section className="app-card p-6"><h2 className="text-xl font-black">Publications</h2><EvidenceList items={publications} render={(item)=><><p className="font-bold">{item.title || 'Publication'}</p>{item.citation && item.citation !== item.title && <p className="mt-1 text-sm text-slate-600">{item.citation}</p>}</>} /></section>
+      {publications.length>0&&<section className="app-card p-6"><h2 className="text-xl font-black">Publications</h2><EvidenceList items={publications} render={(item)=><><p className="font-bold">{item.title || 'Publication'}</p>{item.citation && item.citation !== item.title && <p className="mt-1 text-sm text-slate-600">{item.citation}</p>}</>} /></section>}
 
       {professionalEvidence.length>0&&<section className="app-card p-6"><h2 className="text-xl font-black">Professional credentials, membership & recognition</h2><EvidenceList items={professionalEvidence} render={(item)=><><p className="font-bold">{item.name}</p><p className="text-sm text-slate-600">{item.provider || 'Provider not detected'} · {item.status || 'unknown'}</p></>} /></section>}
 
-      <section className="app-card p-6"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-black">3. Career Intelligence</h2><p className="mt-1 text-sm text-slate-600">Use this reviewed resume evidence to generate career matches and skill gaps.</p></div><button onClick={openCareer} className="rounded-xl bg-teal-600 px-6 py-3 font-bold text-white hover:bg-teal-700">Open Career Intelligence</button></div>{recommendations.length>0&&<div className="mt-4 grid gap-3 md:grid-cols-2">{recommendations.slice(0,4).map((rec)=><div key={rec.id||rec.path} className="rounded-xl border border-slate-200 p-4"><p className="font-bold">{rec.path}</p><p className="text-sm text-slate-600">{Math.round(Number(rec.match_percentage||0))}% match · {safe(rec.matched_skills).length} mapped competencies</p></div>)}</div>}</section>
+      {recommendations.length>0&&<section className="app-card p-6"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-black">3. Career Intelligence</h2><p className="mt-1 text-sm text-slate-600">Explore careers that fit the evidence you reviewed above, then compare gaps and next steps.</p></div><button onClick={openCareer} className="rounded-xl bg-teal-600 px-6 py-3 font-bold text-white hover:bg-teal-700">Open Career Intelligence</button></div><div className="mt-4 grid gap-3 md:grid-cols-2">{recommendations.slice(0,4).map((rec)=><div key={rec.id||rec.path} className="rounded-xl border border-slate-200 p-4"><p className="font-bold">{rec.path}</p><p className="text-sm text-slate-600">{Math.round(Number(rec.match_percentage||0))}% match · {safe(rec.matched_skills).length} mapped competencies</p></div>)}</div></section>}
     </>}
   </div>;
 };
