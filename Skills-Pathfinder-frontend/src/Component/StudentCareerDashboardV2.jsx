@@ -5,6 +5,7 @@ import AcademicPathwaysV2 from './AcademicPathwaysV2';
 const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
 const safe = (value) => Array.isArray(value) ? value : [];
 const normalize = (value) => String(value || '').trim().toLowerCase();
+const norm = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, value));
 const degreePattern = /\b(ph\.?d|doctor|master|m\.?s\.?|m\.?sc|mba|bachelor|b\.?s\.?|b\.?sc|associate|a\.?s\.?)\b/i;
 
@@ -83,18 +84,29 @@ const StudentCareerDashboardV2 = ({ user, onAnalyzeResume, onOpenCareerIntellige
   if (loading) return <div className="app-card p-8 text-center text-slate-500">Building your career dashboard…</div>;
   if (error) return <div className="app-card border-rose-200 p-6 text-rose-800">{error}</div>;
 
-  const latestAnalysis = data.analyses.find((row) => safe(row.recommendations).length || safe(row.extracted_skills).length) || data.analyses[0] || null;
+  const latestAnalysis = data.analyses.find((row) => safe(row.recommendations).length || safe(row.extracted_skills).length || safe(row.raw_analysis?.recommendations).length || safe(row.raw_analysis?.extracted_skills).length) || data.analyses[0] || null;
   const resumePayload = latestAnalysis?.raw_analysis || latestAnalysis || {};
-  const resumeEducation = safe(resumePayload.education);
+  const resumeEducation = safe(resumePayload.education || resumePayload.structured_evidence?.education);
   const resumeCourses = safe(resumePayload.courses_from_resume || resumePayload.structured_evidence?.courses);
   const resumeFormal = resumeEducation.filter((item) => degreePattern.test(`${item?.program_or_degree || ''} ${item?.field_of_study || ''}`));
-  const resumeTraining = [...resumeEducation.filter((item) => !resumeFormal.includes(item)), ...resumeCourses];
+  const formalInstitutions = new Set(resumeFormal.map((item) => norm(item?.institution)).filter(Boolean));
+  const resumeAcademicSubjects = resumeCourses.filter((item) => {
+    const provider = norm(item?.institution_or_provider || item?.institution);
+    return item?.course_type === 'academic_subject' || item?.type === 'academic_subject' || (provider && formalInstitutions.has(provider));
+  });
+  const academicSubjectKeys = new Set(resumeAcademicSubjects.map((item) => norm(item?.name || item?.program_or_degree)).filter(Boolean));
+  const resumeTraining = [...resumeEducation.filter((item) => !resumeFormal.includes(item)), ...resumeCourses].filter((item, index, all) => {
+    const key = norm(item?.name || item?.program_or_degree);
+    if (!key || academicSubjectKeys.has(key)) return false;
+    return all.findIndex((other) => norm(other?.name || other?.program_or_degree) === key) === index;
+  });
 
   const formalEducationCount = Math.max(data.history.length, resumeFormal.length);
   const completedTrainingCount = resumeTraining.length;
-  const academicEvidenceCount = formalEducationCount;
+  const resumeAcademicSubjectCount = resumeAcademicSubjects.length;
+  const academicEvidenceCount = formalEducationCount + resumeAcademicSubjectCount + data.subjects.length;
 
-  const analysisRecommendations = safe(latestAnalysis?.recommendations);
+  const analysisRecommendations = safe(resumePayload?.recommendations).length ? safe(resumePayload.recommendations) : safe(latestAnalysis?.recommendations);
   const savedRecommendations = [];
   const seenCareers = new Set();
   data.careerRows.forEach((row) => {
@@ -136,15 +148,16 @@ const StudentCareerDashboardV2 = ({ user, onAnalyzeResume, onOpenCareerIntellige
   const manualAcademicBase = data.academic ? 35 : 0;
   const formalEducationCredit = formalEducationCount ? 45 : 0;
   const creditsEarned = Number(data.academic?.credits_earned || 0);
+  const subjectCountForAcademic = data.subjects.length + resumeAcademicSubjectCount;
   const academicCoverage = clamp(Math.round(
     Math.max(manualAcademicBase, formalEducationCredit) +
     Math.min(creditsEarned, 120) / 120 * 30 +
-    Math.min(safe(data.subjects).length, 10) * 3
+    Math.min(subjectCountForAcademic, 10) * 3
   ));
 
   const profileFields = ['full_name', 'phone', 'city', 'state'];
   const profileCompletion = Math.round(profileFields.filter((field) => String(data.profile?.[field] || '').trim()).length / profileFields.length * 100);
-  const hasEvidence = Boolean(data.academic || formalEducationCount || completedTrainingCount || data.subjects.length || skills.length || data.certs.length || data.courses.length || data.analyses.length);
+  const hasEvidence = Boolean(data.academic || academicEvidenceCount || completedTrainingCount || skills.length || data.certs.length || data.courses.length || data.analyses.length);
   const readiness = !hasEvidence && !topCareer
     ? 0
     : topCareer
@@ -154,7 +167,7 @@ const StudentCareerDashboardV2 = ({ user, onAnalyzeResume, onOpenCareerIntellige
   const dimensions = [
     ['Career Fit', careerFit, 'Generate or refine Career Intelligence for your target role.'],
     ['Evidence', evidenceStrength, 'Add verified certificates, stronger resume evidence, or documented skill sources.'],
-    ['Learning', learningProgress, completedTrainingCount ? 'Completed professional training is recognized here. Add ongoing learning tied to a priority skill gap.' : 'Add or complete learning tied to a priority skill gap.'],
+    ['Learning', learningProgress, completedTrainingCount ? 'Completed professional training is recognized here. Add ongoing learning tied to a priority skill gap.' : 'Add or complete professional learning tied to a priority skill gap.'],
     ['Academic', academicCoverage, academicEvidenceCount ? 'Formal education and academic subjects are included here.' : 'Add formal education, subjects, credits, or academic progress.'],
     ['Profile', profileCompletion, 'Complete the missing profile fields so reports and job guidance are stronger.']
   ];
@@ -166,7 +179,7 @@ const StudentCareerDashboardV2 = ({ user, onAnalyzeResume, onOpenCareerIntellige
         <div>
           <span className="rounded-full bg-teal-400/15 px-3 py-1 text-xs font-bold uppercase tracking-[0.16em] text-teal-300">Career command center</span>
           <h2 className="mt-5 text-3xl font-black sm:text-4xl">{topCareer ? `Strongest current path: ${topCareer.path}` : 'Build your career profile from any evidence you have.'}</h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">All saved evidence feeds one Career Intelligence profile. Formal education and completed professional training are scored in separate readiness dimensions.</p>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">Your saved resume, academic evidence, professional learning, certificates and tracked skills are combined into one career profile.</p>
           <div className="mt-6 flex flex-wrap gap-3">
             <button onClick={() => setShowAcademic(true)} className="rounded-xl bg-teal-400 px-5 py-3 text-sm font-bold text-slate-950">Academic Profile & Subjects</button>
             <button onClick={onAnalyzeResume} className="rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-bold text-white">Resume & Work Experience</button>
@@ -177,7 +190,7 @@ const StudentCareerDashboardV2 = ({ user, onAnalyzeResume, onOpenCareerIntellige
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">Readiness estimate</p>
           <div className="mt-3 flex items-end gap-2"><span className="text-6xl font-black">{readiness}</span><span className="pb-2 text-xl text-slate-400">%</span></div>
           <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-teal-400" style={{ width: `${readiness}%` }} /></div>
-          <p className="mt-3 text-xs text-slate-400">Evidence categories are counted once in their appropriate readiness dimension.</p>
+          <p className="mt-3 text-xs text-slate-400">Each evidence category contributes only to its appropriate readiness dimension.</p>
           <p className="mt-4 rounded-xl bg-white/[0.07] p-3 text-xs text-slate-300"><strong className="text-white">Best way to improve:</strong> {priority?.[2]}</p>
         </div>
       </div>
@@ -199,10 +212,11 @@ const StudentCareerDashboardV2 = ({ user, onAnalyzeResume, onOpenCareerIntellige
         <p className="text-xs font-bold uppercase tracking-[0.14em] text-sky-700">Evidence recognized</p>
         <h3 className="mt-1 text-xl font-bold">Resume + saved profile</h3>
         <div className="mt-5 space-y-3 text-sm">
-          <div className="rounded-xl bg-slate-50 p-4"><strong>Formal education:</strong> {formalEducationCount}</div>
-          <div className="rounded-xl bg-slate-50 p-4"><strong>Completed professional training:</strong> {completedTrainingCount}</div>
-          <div className="rounded-xl bg-slate-50 p-4"><strong>Academic readiness:</strong> {academicCoverage}%</div>
-          <div className="rounded-xl bg-slate-50 p-4"><strong>Learning readiness:</strong> {learningProgress}%</div>
+          {formalEducationCount > 0 && <div className="rounded-xl bg-slate-50 p-4"><strong>Formal education:</strong> {formalEducationCount}</div>}
+          {resumeAcademicSubjectCount > 0 && <div className="rounded-xl bg-slate-50 p-4"><strong>Resume academic subjects:</strong> {resumeAcademicSubjectCount}</div>}
+          {completedTrainingCount > 0 && <div className="rounded-xl bg-slate-50 p-4"><strong>Completed professional training:</strong> {completedTrainingCount}</div>}
+          {academicCoverage > 0 && <div className="rounded-xl bg-slate-50 p-4"><strong>Academic readiness:</strong> {academicCoverage}%</div>}
+          {learningProgress > 0 && <div className="rounded-xl bg-slate-50 p-4"><strong>Learning readiness:</strong> {learningProgress}%</div>}
         </div>
       </div>
     </section>
