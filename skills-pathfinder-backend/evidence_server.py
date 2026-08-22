@@ -42,6 +42,8 @@ SKILL_CANONICAL = {
     "health safety environment": "HSE Compliance",
     "health safety and environment": "HSE Compliance",
     "risk": "Risk Management",
+    "leadership": "Team Leadership",
+    "project coordination": "Project Management",
 }
 
 
@@ -161,7 +163,6 @@ def _parse_month_year(value: str) -> Optional[date]:
 
 
 def _date_range(line: str) -> Tuple[Optional[str], Optional[str], Optional[date], Optional[date]]:
-    # Handles "Apr 2010 – Nov 2023", hyphen, en dash, em dash and Present.
     m = re.search(
         r"\b([A-Za-z]{3,9}\s+\d{4}|\d{4})\s*[\-–—]\s*([A-Za-z]{3,9}\s+\d{4}|\d{4}|Present|Current|Now)\b",
         line, re.I
@@ -178,17 +179,13 @@ def _fallback_experience(text: str) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     i = 0
     while i < len(lines):
-        # A date line usually follows role + employer/location.
         start_raw, end_raw, start_dt, end_dt = _date_range(lines[i])
         if start_raw and i >= 1:
             role = lines[i - 2] if i >= 2 else ""
             employer = lines[i - 1] if i >= 1 else ""
-            # If the immediately preceding line looks like a location-bearing employer string,
-            # keep it intact. Role is normally the line before it.
             responsibilities = []
             j = i + 1
             while j < len(lines) and not _date_range(lines[j])[0]:
-                # stop before the next role/employer pair when a likely title line appears
                 if j + 2 < len(lines) and _date_range(lines[j + 2])[0]:
                     break
                 responsibilities.append(lines[j].lstrip("-• "))
@@ -205,7 +202,6 @@ def _fallback_experience(text: str) -> List[Dict[str, Any]]:
                 "_end": end_dt.isoformat() if end_dt else None,
             })
         i += 1
-    # Deduplicate on role/employer/date.
     out, seen = [], set()
     for r in records:
         key = (r.get("role", "").lower(), r.get("employer", "").lower(), r.get("start_date"), r.get("end_date"))
@@ -221,7 +217,6 @@ def _fallback_education(text: str) -> List[Dict[str, Any]]:
     lines = sections.get("education") or []
     out: List[Dict[str, Any]] = []
     for line in lines:
-        # Education lines in resumes often use "program – institution, location, date".
         pieces = [p.strip() for p in re.split(r"\s+[–—-]\s+", line, maxsplit=1)]
         program = pieces[0] if pieces else line
         rest = pieces[1] if len(pieces) > 1 else ""
@@ -251,7 +246,6 @@ def _fallback_publications(text: str) -> List[Dict[str, Any]]:
     lines = sections.get("publications") or []
     if not lines:
         return []
-    # Join wrapped publication lines and split conservatively on DOI boundaries/new entries.
     joined = " ".join(lines).strip()
     if not joined:
         return []
@@ -259,7 +253,6 @@ def _fallback_publications(text: str) -> List[Dict[str, Any]]:
 
 
 def _experience_years(records: List[Dict[str, Any]]) -> float:
-    # Union the month ranges so overlapping jobs are not double-counted.
     months = set()
     today = date.today()
     for item in records or []:
@@ -278,30 +271,55 @@ def _experience_years(records: List[Dict[str, Any]]) -> float:
 
 
 def _signal_skills(text: str) -> List[Dict[str, Any]]:
+    """Deterministic evidence enrichment for skills explicitly present in resume text.
+
+    These rules are intentionally domain-agnostic: they only emit a skill when a matching
+    phrase is present in the uploaded document. AI extraction can add context, but a temporary
+    AI variation should not make obvious resume skills disappear on a repeated upload.
+    """
     rules = [
+        (r"\bproject management\b|\bproject coordination\b|coordinated and supervised projects|concept to completion", "Project Management", "Leadership"),
         (r"\bHSE\b|health,? safety.*environment", "HSE Compliance", "Methodology/Standard"),
         (r"risk management", "Risk Management", "Professional Skill"),
+        (r"\b33/11/0\.415\s*kV\b|\bpower distribution\b|distribution network", "Power Distribution", "Engineering"),
+        (r"\b33/11\s*kV\b|\b11\s*kV\b|medium voltage", "MV Electrical Power Distribution", "Engineering"),
         (r"overhead line", "Overhead Lines", "Domain Knowledge"),
         (r"underground cabl", "Underground Cabling", "Domain Knowledge"),
-        (r"troubleshoot", "Troubleshooting", "Technical Skill"),
+        (r"troubleshoot|vibration diagnostic|fault detection", "Troubleshooting", "Technical Skill"),
         (r"\bMAXIMO\b", "MAXIMO", "Tool/Software"),
         (r"\bGIS\b", "GIS", "Tool/Software"),
-        (r"budget planning", "Budget Management", "Professional Skill"),
+        (r"budget planning|budget management", "Budget Management", "Professional Skill"),
         (r"asset lifecycle", "Asset Lifecycle Management", "Professional Skill"),
-        (r"stakeholder collaboration", "Stakeholder Collaboration", "Soft Skill"),
-        (r"cross-functional teams|led .*teams", "Team Leadership", "Soft Skill"),
+        (r"stakeholder collaboration|stakeholder coordination|stakeholder reporting", "Stakeholder Collaboration", "Soft Skill"),
+        (r"cross-functional teams|led .*teams|team leadership|supervised .*team", "Team Leadership", "Soft Skill"),
         (r"engineering design", "Engineering Design", "Domain Knowledge"),
         (r"maintenance", "Equipment Maintenance", "Technical Skill"),
         (r"technical training|training programs", "Technical Training", "Professional Skill"),
+        (r"\bAutoCAD\b", "AutoCAD", "Tool/Software"),
+        (r"\bPython\b", "Python", "Programming"),
+        (r"\bSQL\b", "SQL", "Programming"),
+        (r"\bPower\s*BI\b", "Power BI", "Data Analytics"),
+        (r"\bTableau\b", "Tableau", "Data Analytics"),
+        (r"\b(?:Microsoft|MS)?\s*Excel\b|\bAdvanced Excel\b", "Microsoft Excel", "Data Analytics"),
+        (r"\bMSBI\b", "MSBI", "Software"),
+        (r"advanced data analytics|\bdata analytics\b", "Data Analytics", "Data Analytics"),
         (r"\bselenium\b", "Selenium", "Tool/Software"),
         (r"software testing", "Software Testing", "Technical Skill"),
-        (r"automation", "Automation", "Technical Skill"),
+        (r"\bautomation\b", "Automation", "Technical Skill"),
+        (r"\bJava\b", "Java", "Programming"),
+        (r"solar power(?: system)?(?: installation| maintenance)?", "Solar Power Systems", "Engineering"),
+        (r"steam power plant", "Steam Power Plant Operations", "Engineering"),
+        (r"\bBangla\b|\bBengali\b", "Bangla", "Languages"),
+        (r"\bEnglish\b", "English", "Languages"),
+        (r"\bHindi\b", "Hindi", "Languages"),
+        (r"\bUrdu\b", "Urdu", "Languages"),
+        (r"\bArabic\b", "Arabic", "Languages"),
     ]
     out = []
     for pattern, name, category in rules:
         m = re.search(pattern, text, re.I | re.S)
         if m:
-            out.append({"name": name, "category": category, "confidence": 0.9, "evidence": m.group(0)[:160]})
+            out.append({"name": name, "category": category, "confidence": 0.9, "evidence": m.group(0)[:160], "source": "resume_signal"})
     return out
 
 
@@ -325,9 +343,9 @@ Important rules:
 - Extract ALL employment roles with employer and dates.
 - Extract ALL education/training records under Education.
 - Extract publications explicitly listed in a Publications section.
-- Extract explicit and strongly demonstrated skills, including HSE, risk management, overhead
-  lines, underground cabling, troubleshooting, MAXIMO, GIS, project management and leadership
-  when supported by the resume.
+- Extract explicit and strongly demonstrated skills, including technical tools, programming,
+  analytics, engineering domains, project/leadership competencies, languages and professional
+  methods when they are supported by the resume.
 - Never emit isolated C/R unless explicitly presented as programming languages.
 - Education is not a skill.
 
@@ -345,8 +363,6 @@ RESUME:
         if not isinstance(data.get(key), list):
             data[key] = []
 
-    # Deterministic fallbacks prevent a successful text extraction from turning into
-    # zero work/education/publication records if the LLM response is incomplete.
     if not data["experience"]:
         data["experience"] = _fallback_experience(text)
     if not data["education"]:
@@ -385,7 +401,14 @@ async def enhanced_upload(file: UploadFile = File(...)):
         skills = _sanitize_skills(main_module.local_skill_fallback(text) + _signal_skills(text))
         ai_failed = True
 
-    recommendations = recommendation_module.get_career_recommendations(skills, top_n=8)
+    # Keep the same structured evidence object attached to scoring so education, experience,
+    # projects and publications influence career recommendations consistently on every path.
+    structured["skills"] = skills
+    recommendations = recommendation_module.get_career_recommendations(
+        skills,
+        top_n=8,
+        structured_evidence=structured,
+    )
     return {
         "filename": filename,
         "character_count": len(text),
@@ -468,8 +491,6 @@ Return ONLY JSON:
     return {"status": "success", "course": request.course_name, "career_title": request.career_title or blueprint.get("canonical_title"), **result}
 
 
-# Every resume entry path should eventually share this endpoint. For now the primary
-# Evidence Builder path is the regression target.
 app.router.routes = [
     route for route in app.router.routes
     if not (getattr(route, "path", None) == "/api/upload" and "POST" in getattr(route, "methods", set()))
