@@ -1,195 +1,44 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+const safeArray=v=>Array.isArray(v)?v:[];
+const pct=v=>{const n=Number(v);return Number.isFinite(n)?Math.round(n<=1?n*100:n):0;};
+const text=v=>String(v||'').trim();
+const norm=v=>text(v).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+const degreePattern=/\b(ph\.?d|doctor|master|m\.?s\.?|m\.?sc|mba|bachelor|b\.?s\.?|b\.?sc|associate|a\.?s\.?)\b/i;
 
-const SkillDashboard = ({ results, onBack, onRecommendations }) => {
-  const [activeTab, setActiveTab] = useState('skills');
-  const [selectedSkill, setSelectedSkill] = useState(null);
+const SkillDashboard=({results,onBack,onRecommendations})=>{
+ const [activeTab,setActiveTab]=useState('resume'),[selectedSkill,setSelectedSkill]=useState(null);
+ const skills=safeArray(results?.extracted_skills), explanations=safeArray(results?.explanations), rawEducation=safeArray(results?.education||results?.structured_evidence?.education), experience=safeArray(results?.experience||results?.structured_evidence?.experience), rawProjects=safeArray(results?.projects||results?.structured_evidence?.projects), publications=safeArray(results?.publications||results?.structured_evidence?.publications), credentials=safeArray(results?.certifications_from_resume||results?.structured_evidence?.certifications), rawCourses=safeArray(results?.courses_from_resume||results?.structured_evidence?.courses), years=Number(results?.total_experience_years??results?.structured_evidence?.total_experience_years??0);
+ const formalEducation=useMemo(()=>rawEducation.filter(e=>degreePattern.test(`${text(e?.program_or_degree)} ${text(e?.field_of_study)}`)),[rawEducation]);
+ const educationTraining=useMemo(()=>rawEducation.filter(e=>!formalEducation.includes(e)),[rawEducation,formalEducation]);
+ const formalInstitutions=useMemo(()=>new Set(formalEducation.map(e=>norm(e?.institution)).filter(Boolean)),[formalEducation]);
+ const academicSubjects=useMemo(()=>rawCourses.filter(c=>{const provider=norm(c?.institution_or_provider||c?.institution);return c?.course_type==='academic_subject'||c?.type==='academic_subject'||(provider&&formalInstitutions.has(provider));}),[rawCourses,formalInstitutions]);
+ const training=useMemo(()=>{const academicKeys=new Set(academicSubjects.map(c=>norm(c?.name||c?.program_or_degree)));const seen=new Set();return [...educationTraining,...rawCourses].filter(c=>{const k=norm(c?.program_or_degree||c?.name);if(!k||academicKeys.has(k)||seen.has(k))return false;seen.add(k);return true;});},[educationTraining,rawCourses,academicSubjects]);
+ const professionalEvidence=useMemo(()=>{const tk=new Set(training.map(c=>norm(c?.program_or_degree||c?.name)));return credentials.filter(c=>!tk.has(norm(c?.name)));},[credentials,training]);
+ const projectAccomplishments=useMemo(()=>{if(rawProjects.length)return rawProjects;const pat=/(project|commission|install|implement|design|startup|start-up|acceptance|integrat|upgrade|deploy|construct|dismantl|supervis|coordinate)/i,seen=new Set(),out=[];experience.forEach(r=>safeArray(r?.responsibilities).forEach(x=>{const v=text(x),k=norm(v);if(!v||!pat.test(v)||seen.has(k))return;seen.add(k);out.push({name:text(r?.role)?`${r.role} project accomplishment`:'Project accomplishment',description:v,employer:text(r?.employer)});}));return out.slice(0,8);},[rawProjects,experience]);
+ const recommendations=useMemo(()=>[...safeArray(results?.recommendations)].sort((a,b)=>(Number(b.match_score)||0)-(Number(a.match_score)||0)),[results?.recommendations]),bestCareer=recommendations[0]||null;
+ const categories=useMemo(()=>{const d={};skills.forEach(s=>{const c=s?.category||'Other';d[c]=(d[c]||0)+1;});return d;},[skills]);
+ const summary=[['Skills',skills.length],['Formal education',formalEducation.length],['Academic subjects',academicSubjects.length],['Training',training.length],['Work roles',experience.length],['Experience',years?`${years.toFixed(1)} yrs`:null],['Projects',projectAccomplishments.length],['Publications',publications.length]].filter(([,v])=>v!==0&&v!==null&&v!==''&&v!==undefined);
+ const Card=({title,children})=><div className="rounded-2xl border border-slate-200 bg-white p-5"><h4 className="font-bold text-slate-900">{title}</h4><div className="mt-2 text-sm leading-6 text-slate-600">{children}</div></div>;
+ const edu=(e,i)=><Card key={i} title={text(e.program_or_degree)||text(e.name)||'Education record'}><p>{text(e.institution)||text(e.institution_or_provider)||'Institution not detected'}</p>{text(e.field_of_study)&&<p>Field: {e.field_of_study}</p>}{text(e.end_or_expected_date)&&<p>Completed: {e.end_or_expected_date}</p>}</Card>;
+ const cta={resume:{title:'Next: Explore your career matches',body:'Your resume evidence is organized and ready. Continue to compare careers that fit your education, experience, training, projects and demonstrated skills.'},skills:{title:'Next: See where your skills can take you',body:'Your skills are now organized from the evidence in your resume. Continue to see which careers align most strongly with what you already know and where further growth could help.'},explanations:{title:'Next: Turn your evidence into career options',body:'You have reviewed the evidence supporting your skills. Continue to compare career paths and see how this evidence contributes to your current readiness.'},recommendations:{title:'Ready to explore your strongest career options?',body:'Open Career Intelligence to compare your leading paths, review market information, explore advancement opportunities and build a personalized roadmap.'}}[activeTab];
 
-  // Calculate skill distribution
-  const skillCategories = {};
-  results.extracted_skills.forEach(skill => {
-    skillCategories[skill.category] = (skillCategories[skill.category] || 0) + 1;
-  });
-
-  return (
-    <div className="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
-      <div className="p-6 border-b border-gray-200">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-800">
-              Skills Analysis for {results.filename}
-            </h1>
-            <p className="text-gray-500 mt-1">
-              Processed {results.character_count} characters • {results.extracted_skills.length} skills found
-            </p>
-          </div>
-          <button 
-            onClick={onBack}
-            className="flex items-center text-indigo-600 hover:text-indigo-800"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
-            </svg>
-            Analyze Another Document
-          </button>
-        </div>
-
-        {/* Tab Navigation */}
-        <div className="flex border-b border-gray-200">
-          {['skills', 'explanations', 'recommendations'].map(tab => (
-            <button
-              key={tab}
-              className={`px-4 py-3 font-medium text-sm ${
-                activeTab === tab 
-                  ? 'border-indigo-500 text-indigo-600 border-b-2' 
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Tab Content */}
-      <div className="p-6">
-        {activeTab === 'skills' && (
-          <div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-              {/* Skill Categories */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="font-semibold text-gray-700 mb-3">Skill Distribution</h3>
-                <div className="space-y-3">
-                  {Object.entries(skillCategories).map(([category, count]) => (
-                    <div key={category} className="flex items-center">
-                      <div className="w-24 text-gray-600 text-sm">{category}</div>
-                      <div className="flex-1 bg-gray-200 rounded-full h-2.5">
-                        <div 
-                          className="bg-indigo-600 h-2.5 rounded-full" 
-                          style={{ width: `${(count / results.extracted_skills.length) * 100}%` }}
-                        ></div>
-                      </div>
-                      <div className="ml-3 text-gray-600 text-sm w-10 text-right">{count}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Skill List */}
-              <div>
-                <h3 className="font-semibold text-gray-700 mb-3">Extracted Skills</h3>
-                <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                  {results.extracted_skills.map((skill, index) => (
-                    <div 
-                      key={index}
-                      className={`p-4 rounded-lg border cursor-pointer transition-all ${
-                        selectedSkill?.name === skill.name 
-                          ? 'border-indigo-500 bg-indigo-50' 
-                          : 'border-gray-200 hover:border-indigo-300'
-                      }`}
-                      onClick={() => setSelectedSkill(skill)}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h4 className="font-medium text-gray-800">{skill.name}</h4>
-                          <p className="text-sm text-gray-500">
-                            {skill.category} • Confidence: {(skill.confidence * 100).toFixed(0)}%
-                          </p>
-                        </div>
-                        {selectedSkill?.name === skill.name && (
-                          <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded">
-                            Selected
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Selected Skill Details */}
-            {selectedSkill && (
-              <div className="mt-6 bg-indigo-50 rounded-lg p-4 border border-indigo-200">
-                <h3 className="font-semibold text-indigo-800 mb-2">
-                  Details for {selectedSkill.name}
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">Category</p>
-                    <p className="font-medium">{selectedSkill.category}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Confidence</p>
-                    <p className="font-medium">{(selectedSkill.confidence * 100).toFixed(0)}%</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Evidence</p>
-                    <p className="font-medium">
-                      {results.explanations.find(e => e.skill === selectedSkill.name)?.evidence || 'Not available'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'explanations' && (
-          <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
-            {results.explanations.map((exp, index) => (
-              <div key={index} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <div className="flex justify-between items-start mb-2">
-                  <h4 className="font-medium text-gray-800">{exp.skill}</h4>
-                  <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded">
-                    {exp.reasoning}
-                  </span>
-                </div>
-                <p className="text-gray-600 text-sm">
-                  <span className="font-medium">Evidence:</span> {exp.evidence}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {activeTab === 'recommendations' && (
-          <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
-            {results.recommendations.map((rec, index) => (
-              <div key={index} className="p-4 bg-indigo-50 rounded-lg border border-indigo-200">
-                <div className="flex justify-between items-start mb-2">
-                  <h4 className="font-bold text-indigo-800 text-lg">{rec.path}</h4>
-                  <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded">
-                    Match
-                  </span>
-                </div>
-                <p className="text-gray-600">
-                  <span className="font-medium">Why it matches:</span> {rec.match_reason}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {/* Career Recommendations Button */}
-      <div className="mt-8 pt-6 border-t border-gray-200">
-        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-6 text-center">
-          <h3 className="text-lg font-semibold text-gray-800 mb-2">
-            🎯 Ready to Explore Career Paths?
-          </h3>
-          <p className="text-gray-600 mb-4 text-sm">
-            Get personalized career recommendations based on your extracted skills
-          </p>
-          <button
-            onClick={() => onRecommendations(results)}
-            className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-medium py-3 px-8 rounded-lg text-lg transition-all shadow-lg hover:shadow-xl"
-          >
-            View Career Recommendations →
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+ return <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-[0_24px_70px_-30px_rgba(15,23,42,0.35)]">
+ <div className="bg-slate-950 px-6 py-8 text-white md:px-8"><div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between"><div><div className="mb-3 inline-flex rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[.16em] text-cyan-200">Resume analysis complete</div><h1 className="text-3xl font-bold md:text-4xl">Review your resume evidence</h1><p className="mt-2 text-sm text-slate-300">Review the evidence found in your resume before exploring your career options.</p></div><button onClick={onBack} className="rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold">Analyze another document</button></div><div className="mt-7 grid gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">{summary.map(([l,v])=><div key={l} className="rounded-2xl border border-white/10 bg-white/10 p-4"><p className="text-xs uppercase text-slate-300">{l}</p><p className="mt-1 text-2xl font-bold">{v}</p></div>)}</div></div>
+ <div className="border-b px-6 md:px-8"><div className="flex flex-wrap gap-2 py-3">{[['resume','Resume Evidence'],['skills','Skill Inventory'],['explanations','Skill Evidence'],['recommendations','Career Snapshot']].map(([t,l])=><button key={t} onClick={()=>setActiveTab(t)} className={`rounded-xl px-4 py-2 text-sm font-semibold ${activeTab===t?'bg-slate-950 text-white':'text-slate-600'}`}>{l}</button>)}</div></div>
+ <div className="p-6 md:p-8">
+ {activeTab==='resume'&&<div className="space-y-7"><div><h3 className="text-xl font-bold">Structured resume evidence</h3><p className="mt-1 text-sm text-slate-500">Only evidence categories found in this resume are shown below.</p></div>
+ {formalEducation.length>0&&<section><h3 className="font-bold">Formal education <span className="text-slate-400">({formalEducation.length})</span></h3><div className="mt-3 grid gap-3 md:grid-cols-2">{formalEducation.map(edu)}</div></section>}
+ {academicSubjects.length>0&&<section><h3 className="font-bold">Academic subjects & coursework <span className="text-slate-400">({academicSubjects.length})</span></h3><p className="mt-1 text-sm text-slate-500">Coursework completed as part of formal education is kept separate from professional training.</p><div className="mt-3 grid gap-3 md:grid-cols-2">{academicSubjects.map(edu)}</div></section>}
+ {training.length>0&&<section><h3 className="font-bold">Completed professional training <span className="text-slate-400">({training.length})</span></h3><div className="mt-3 grid gap-3 md:grid-cols-2">{training.map(edu)}</div></section>}
+ {experience.length>0&&<section><div className="flex flex-wrap items-center gap-3"><h3 className="font-bold">Work experience <span className="text-slate-400">({experience.length} roles)</span></h3>{years>0&&<span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">{years.toFixed(1)} total non-overlapping years</span>}</div><div className="mt-3 grid gap-3 md:grid-cols-2">{experience.map((e,i)=><Card key={i} title={text(e.role)||'Work role'}><p>{text(e.employer)||'Employer not detected'}</p>{(e.start_date||e.end_date)&&<p>{text(e.start_date)} → {text(e.end_date)}</p>}{safeArray(e.responsibilities).length>0&&<p className="mt-2">{safeArray(e.responsibilities).slice(0,2).join(' ')}</p>}</Card>)}</div></section>}
+ {projectAccomplishments.length>0&&<section><h3 className="font-bold">Project accomplishments <span className="text-slate-400">({projectAccomplishments.length})</span></h3><p className="mt-1 text-sm text-slate-500">Includes explicit projects and substantial project work described in employment history.</p><div className="mt-3 grid gap-3 md:grid-cols-2">{projectAccomplishments.map((p,i)=><Card key={i} title={text(p.name)||'Project accomplishment'}>{text(p.employer)&&<p className="mb-1 text-xs font-semibold uppercase text-slate-400">{p.employer}</p>}<p>{text(p.description)||text(p.evidence)}</p></Card>)}</div></section>}
+ {publications.length>0&&<section><h3 className="font-bold">Publications <span className="text-slate-400">({publications.length})</span></h3><div className="mt-3 grid gap-3">{publications.map((p,i)=><Card key={i} title={text(p.title)||'Publication'}>{text(p.citation)||text(p.evidence)}</Card>)}</div></section>}
+ {professionalEvidence.length>0&&<section><h3 className="font-bold">Professional credentials, membership & recognition</h3><div className="mt-3 grid gap-3 md:grid-cols-2">{professionalEvidence.map((c,i)=><Card key={i} title={text(c.name)||'Professional evidence'}>{text(c.provider)||text(c.evidence)}</Card>)}</div></section>}
+ </div>}
+ {activeTab==='skills'&&<div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]"><div className="rounded-2xl border bg-slate-50 p-5"><h3 className="font-bold">Skill distribution</h3><p className="mt-1 text-sm text-slate-500">This view shows the evidence-backed skills found in your resume and where your current strengths are concentrated.</p><div className="mt-5 space-y-4">{Object.entries(categories).map(([c,n])=><div key={c}><div className="flex justify-between text-sm"><span>{c}</span><span>{n}</span></div><div className="mt-1 h-2 rounded-full bg-slate-200"><div className="h-full rounded-full bg-indigo-600" style={{width:`${skills.length?n/skills.length*100:0}%`}}/></div></div>)}</div></div><div><h3 className="font-bold">Extracted skills</h3><p className="mt-1 text-sm text-slate-500">Confidence shows how strongly the uploaded resume supports each skill.</p><div className="mt-4 grid gap-3 sm:grid-cols-2">{skills.map((s,i)=><button key={i} onClick={()=>setSelectedSkill(s)} className="rounded-2xl border p-4 text-left"><div className="flex justify-between"><div><b>{s?.name||'Unnamed skill'}</b><p className="text-xs text-slate-500">{s?.category||'Other'}</p></div><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs text-emerald-700">{pct(s?.confidence)}%</span></div></button>)}</div></div>{selectedSkill&&<div className="xl:col-span-2 rounded-2xl border border-indigo-100 bg-indigo-50 p-5"><b>{selectedSkill.name}</b><p className="mt-2 text-sm text-slate-700">{explanations.find(e=>e?.skill===selectedSkill.name)?.evidence||selectedSkill.evidence||'Evidence text not available.'}</p></div>}</div>}
+ {activeTab==='explanations'&&<div className="grid gap-4 md:grid-cols-2">{explanations.map((e,i)=><div key={i} className="rounded-2xl border p-5"><b>{e?.skill||'Skill evidence'}</b><p className="mt-3 text-sm text-slate-600">{e?.reasoning}</p><div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm">{e?.evidence||'Not available'}</div></div>)}</div>}
+ {activeTab==='recommendations'&&<div className="space-y-5">{bestCareer&&<div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5"><p className="text-xs font-bold uppercase tracking-[.16em] text-indigo-600">Best current match</p><div className="mt-2 flex flex-wrap items-center gap-3"><h2 className="text-2xl font-bold">{bestCareer.path}</h2><span className="rounded-full bg-indigo-600 px-3 py-1 text-xs font-semibold text-white">{pct(bestCareer.match_score)}% readiness</span></div><p className="mt-2 text-sm text-slate-600">{bestCareer.match_reason}</p></div>}<div className="grid gap-4 lg:grid-cols-2">{recommendations.map((r,i)=><div key={r?.id||i} className="rounded-2xl border p-5"><p className="text-xs font-bold uppercase text-indigo-600">{i===0?'Best current match':r.category}</p><div className="flex justify-between"><h4 className="text-lg font-bold">{r.path}</h4><b>{pct(r.match_score)}%</b></div><p className="mt-3 text-sm text-slate-600">{r.match_reason}</p><p className="mt-3 text-xs text-slate-500">Core competencies evidenced: {safeArray(r.matched_skills).length} · Core gaps: {safeArray(r.missing_skills).length}</p></div>)}</div></div>}
+ {bestCareer&&<div className="mt-8 rounded-2xl border border-indigo-100 bg-indigo-50 p-5"><p className="font-bold text-indigo-950">{cta.title}</p><p className="mt-2 max-w-3xl text-sm leading-6 text-indigo-900">{cta.body}</p><button onClick={()=>onRecommendations(results)} className="mt-4 rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white">Open Career Intelligence</button></div>}
+ </div></div>;
 };
-
 export default SkillDashboard;
