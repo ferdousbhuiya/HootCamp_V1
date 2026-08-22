@@ -14,14 +14,19 @@ export const installAuthScrollFix = () => {
     const button = event.target.closest('button');
     if (!button || !AUTH_SWITCH_LABELS.has(normalize(button.textContent))) return;
 
-    // React changes the auth mode after the click. Wait for that render, then bring
-    // the active form into view so users never have to discover it by scrolling.
+    // React changes login/signup mode after the click. Wait for the new form,
+    // then bring the full auth card into view and focus the first field.
     window.setTimeout(() => {
       const form = document.querySelector('main form');
       if (!form) return;
-      form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const firstInput = form.querySelector('input');
-      if (firstInput && document.activeElement === document.body) firstInput.focus({ preventScroll: true });
-    }, 80);
+
+      const panel = form.closest('.max-w-xl') || form;
+      panel.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+
+      window.setTimeout(() => {
+        const firstInput = form.querySelector('input:not([type="hidden"]):not([disabled])');
+        if (firstInput) firstInput.focus({ preventScroll: true });
+      }, 220);
+    }, 60);
   });
 };
