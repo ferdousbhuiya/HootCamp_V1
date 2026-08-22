@@ -19,6 +19,20 @@ const supabase = createClient(
 const normalizeName = (value = '') => String(value).trim().replace(/\s+/g, ' ').toLowerCase();
 const safeArray = (value) => Array.isArray(value) ? value : [];
 
+const hydrateSavedAnalysis = (row) => {
+  if (!row) return null;
+  const raw = row.raw_analysis && typeof row.raw_analysis === 'object' ? row.raw_analysis : {};
+  return {
+    ...raw,
+    analysis_id: row.id || raw.analysis_id || null,
+    filename: row.filename || raw.filename || 'Saved resume',
+    character_count: row.character_count ?? raw.character_count ?? 0,
+    extracted_skills: safeArray(raw.extracted_skills).length ? safeArray(raw.extracted_skills) : safeArray(row.extracted_skills),
+    explanations: safeArray(raw.explanations).length ? safeArray(raw.explanations) : safeArray(row.explanations),
+    recommendations: safeArray(raw.recommendations).length ? safeArray(raw.recommendations) : safeArray(row.recommendations)
+  };
+};
+
 function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -29,6 +43,7 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [openingCareerIntelligence, setOpeningCareerIntelligence] = useState(false);
+  const [openingResumeReview, setOpeningResumeReview] = useState(false);
   const [workspaceNavigationKey, setWorkspaceNavigationKey] = useState(0);
   const [workspaceMode, setWorkspaceMode] = useState('dashboard');
 
@@ -255,6 +270,61 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const startNewAnalysis = () => {
+    setResults(null);
+    setShowRecommendations(false);
+    setWorkspaceMode('analysis');
+    setError(null);
+    setWorkspaceNavigationKey((current) => current + 1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const openSavedResumeReview = async (savedAnalysis = null) => {
+    if (!user?.id || openingResumeReview) return;
+    setOpeningResumeReview(true);
+    setError(null);
+    try {
+      let row = savedAnalysis;
+      if (!row) {
+        const { data, error: latestError } = await supabase
+          .from('resume_analyses')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('uploaded_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (latestError) throw latestError;
+        row = data;
+      } else if (!row.raw_analysis && row.id) {
+        const { data, error: fetchError } = await supabase
+          .from('resume_analyses')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('id', row.id)
+          .maybeSingle();
+        if (fetchError) throw fetchError;
+        row = data || row;
+      }
+
+      if (!row) {
+        startNewAnalysis();
+        return;
+      }
+
+      setResults(hydrateSavedAnalysis(row));
+      setShowRecommendations(false);
+      setWorkspaceMode('analysis');
+      setWorkspaceNavigationKey((current) => current + 1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (resumeError) {
+      console.error('Could not reopen saved resume review:', resumeError);
+      setWorkspaceMode('dashboard');
+      setError(`Your saved resume review could not be reopened: ${resumeError.message}`);
+    } finally {
+      setOpeningResumeReview(false);
+    }
+  };
+
   const buildEvidenceFromSavedProfile = async () => {
     const [skillsResult, academicResult, subjectsResult, coursesResult, certsResult, goalResult] = await Promise.all([
       supabase.from('skill_tracking').select('*').eq('user_id', user.id),
@@ -283,7 +353,7 @@ function App() {
     }
     for (const course of coursesResult.data || []) {
       safeArray(course.extracted_skills).forEach((skill) => addEvidence(skill?.name || skill, course.subject_area || 'Course Skill', 0.76, 'ongoing_course'));
-      addEvidence(course.course_name, course.subject_area || 'Ongoing Course', ['completed'].includes(normalizeName(course.status)) ? 0.74 : 0.6, 'ongoing_course');
+      addEvidence(course.course_name, course.subject_area || 'Ongoing Course', normalizeName(course.status) === 'completed' ? 0.74 : 0.6, 'ongoing_course');
     }
     for (const cert of certsResult.data || []) {
       safeArray(cert.extracted_skills).forEach((skill) => addEvidence(skill?.name || skill, skill?.category || 'Certification Skill', cert.is_verified ? 0.95 : 0.78, 'certificate'));
@@ -321,22 +391,18 @@ function App() {
 
       const { data: analyses, error: latestError } = await supabase
         .from('resume_analyses')
-        .select('id,filename,character_count,extracted_skills,explanations,recommendations,uploaded_at')
+        .select('*')
         .eq('user_id', user.id)
         .order('uploaded_at', { ascending: false })
         .limit(10);
       if (latestError) throw latestError;
 
-      const useful = (analyses || []).find((row) => safeArray(row.recommendations).length > 0 || safeArray(row.extracted_skills).length > 0);
+      const useful = (analyses || []).find((row) => {
+        const hydrated = hydrateSavedAnalysis(row);
+        return safeArray(hydrated?.recommendations).length > 0 || safeArray(hydrated?.extracted_skills).length > 0;
+      });
       if (useful) {
-        setResults({
-          analysis_id: useful.id,
-          filename: useful.filename,
-          character_count: useful.character_count,
-          extracted_skills: safeArray(useful.extracted_skills),
-          explanations: safeArray(useful.explanations),
-          recommendations: safeArray(useful.recommendations)
-        });
+        setResults(hydrateSavedAnalysis(useful));
         setShowRecommendations(true);
         setWorkspaceMode('career');
         setWorkspaceNavigationKey((current) => current + 1);
@@ -374,20 +440,11 @@ function App() {
     }
   };
 
-  const startNewAnalysis = () => {
-    setResults(null);
-    setShowRecommendations(false);
-    setWorkspaceMode('analysis');
-    setError(null);
-    setWorkspaceNavigationKey((current) => current + 1);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
   if (showOnboarding && user) return <OnboardingWizardV2 user={user} onComplete={handleOnboardingComplete} onCancel={handleOnboardingCancel} />;
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="animate-spin rounded-full h-14 w-14 border-4 border-teal-100 border-t-teal-600" /></div>;
   if (!user) return <Auth onAuthSuccess={handleAuthSuccess} />;
 
-  const currentWorkspace = workspaceMode === 'dashboard' ? 'Career Dashboard' : showRecommendations || workspaceMode === 'career' ? 'Career Intelligence' : results ? 'Skill Analysis' : 'Profile & Resume Analysis';
+  const currentWorkspace = workspaceMode === 'dashboard' ? 'Career Dashboard' : showRecommendations || workspaceMode === 'career' ? 'Career Intelligence' : results ? 'Resume Review' : 'Profile & Resume Analysis';
 
   return (
     <div className="authenticated-shell">
@@ -396,7 +453,7 @@ function App() {
           <div className="flex shrink-0 items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-teal-500 text-sm font-black tracking-tight text-slate-950">SP</div><div className="hidden sm:block"><p className="text-sm font-bold">Skills Pathfinder</p><p className="text-[11px] text-slate-400">Student career workspace</p></div></div>
           <nav className="ml-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-xl bg-white/5 p-1" aria-label="Primary workspace navigation">
             <button onClick={openDashboard} className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${workspaceMode === 'dashboard' ? 'bg-teal-400 text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>Dashboard</button>
-            <button onClick={startNewAnalysis} className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${workspaceMode === 'analysis' && !showRecommendations ? 'bg-white text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>Profile / Resume</button>
+            <button onClick={() => openSavedResumeReview()} disabled={openingResumeReview} className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-60 ${workspaceMode === 'analysis' && !showRecommendations ? 'bg-white text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>{openingResumeReview ? 'Opening…' : 'Profile / Resume'}</button>
             <button onClick={() => openLatestCareerIntelligence()} disabled={openingCareerIntelligence} className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-60 ${showRecommendations || workspaceMode === 'career' ? 'bg-teal-400 text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>{openingCareerIntelligence ? 'Building…' : 'Career Intelligence'}</button>
           </nav>
           <div className="hidden shrink-0 items-center gap-2 lg:flex"><span className="h-2 w-2 rounded-full bg-emerald-400" /><span className="text-xs text-slate-300">Saved workspace</span></div>
@@ -412,11 +469,8 @@ function App() {
         onLogout={handleLogout}
         onStartOnboarding={() => setShowOnboarding(true)}
         onViewAnalysis={(savedAnalysis) => {
-          setWorkspaceMode('analysis');
-          if (savedAnalysis) setResults({ analysis_id: savedAnalysis.id, filename: savedAnalysis.filename, character_count: savedAnalysis.character_count, extracted_skills: safeArray(savedAnalysis.extracted_skills), explanations: safeArray(savedAnalysis.explanations), recommendations: safeArray(savedAnalysis.recommendations) });
-          else setResults(null);
-          setShowRecommendations(false);
-          setError(null);
+          if (savedAnalysis) openSavedResumeReview(savedAnalysis);
+          else startNewAnalysis();
         }}
       >
         {error && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">{error}</div>}
@@ -427,7 +481,7 @@ function App() {
         ) : showRecommendations ? (
           <CareerRecommendations skills={results} user={user} onBack={() => { setShowRecommendations(false); setWorkspaceMode('analysis'); }} />
         ) : (
-          <SkillDashboard results={results} onBack={() => { setResults(null); setWorkspaceMode('analysis'); setError(null); }} onRecommendations={() => { setShowRecommendations(true); setWorkspaceMode('career'); }} />
+          <SkillDashboard results={results} onBack={startNewAnalysis} onRecommendations={() => { setShowRecommendations(true); setWorkspaceMode('career'); }} />
         )}
       </UserDashboard>
       <SavedCareerHistory user={user} />
