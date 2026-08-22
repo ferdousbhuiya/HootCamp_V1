@@ -27,59 +27,156 @@ const meaningfulMatch = (left, right) => {
   return a.includes(b) || b.includes(a);
 };
 
-const engineeringProjectManagerGuidance = {
+const commonResources = [
+  { name: 'O*NET Online', purpose: 'Review occupational tasks, knowledge, skills and related job titles.', url: 'https://www.onetonline.org/' },
+  { name: 'U.S. Bureau of Labor Statistics Occupational Employment and Wage Statistics', purpose: 'Validate wage and employment information when the app has a confirmed occupational mapping.', url: 'https://www.bls.gov/oes/' }
+];
+
+const mechanicalGuidance = {
+  'manufacturing engineer': {
+    advancement: [
+      { title: 'Build recent manufacturing evidence', detail: 'Turn academic and project work into concise case studies that show fabrication, manufacturability, process decisions, quality checks and measurable outcomes.' },
+      { title: 'Strengthen design-for-manufacturing evidence', detail: 'Show how CAD decisions affect producibility, assembly, material choice, tolerances, cost and repeatability.' },
+      { title: 'Add process-improvement exposure', detail: 'Use an internship, co-op, lab, capstone or portfolio project to demonstrate workflow analysis, root-cause thinking and continuous improvement.' },
+      { title: 'Document shop-floor and safety awareness', detail: 'Connect welding, 3D printing, power tools and fabrication work to safe procedures, inspection, quality and production constraints.' }
+    ],
+    certifications: [
+      { name: 'Lean / Six Sigma training', provider: 'Employer, university or recognized training provider', note: 'Optional. Useful when target manufacturing roles repeatedly ask for process improvement, quality or continuous-improvement knowledge.' }
+    ],
+    roadmap: [
+      { period: '30 days', items: ['Create two manufacturing-focused project case studies showing design decisions, fabrication steps and measurable results.', 'Update the resume so CAD, 3D printing, welding, troubleshooting and project coordination are tied to outcomes.', 'Review 15 to 20 Manufacturing Engineer postings and record recurring requirements such as DFM, quality, Lean, GD&T, ERP/MRP or process validation.'] },
+      { period: '6 months', items: ['Complete a manufacturing, quality or process-improvement project that produces measurable before/after evidence.', 'Gain recent internship, co-op, lab, maker-space or volunteer exposure to real production constraints.', 'Close the most common technical gap found in target postings, such as GD&T, Lean/Six Sigma, quality systems or process documentation.'] },
+      { period: '1 year', items: ['Maintain a portfolio of manufacturing projects with drawings, process choices, inspection/quality evidence and outcomes.', 'Target entry-level Manufacturing Engineer, Process Engineer and Design-for-Manufacturing roles aligned with the strongest project evidence.', 'Reassess market requirements and update the career plan using current job postings and verified wage data.'] }
+    ],
+    resources: [
+      { name: 'SME', purpose: 'Manufacturing career, technical and professional-development resources.', url: 'https://www.sme.org/' },
+      { name: 'ASME', purpose: 'Mechanical engineering standards, professional development and career resources.', url: 'https://www.asme.org/' },
+      ...commonResources
+    ]
+  },
+  'mechanical engineer': {
+    advancement: [
+      { title: 'Turn projects into engineering case studies', detail: 'Document requirements, calculations, CAD/modeling choices, testing, troubleshooting and final results for each major mechanical project.' },
+      { title: 'Strengthen analysis-to-design evidence', detail: 'Connect MATLAB, simulation, thermodynamics, heat transfer and CAD work to engineering decisions rather than listing tools alone.' },
+      { title: 'Build recent professional exposure', detail: 'Use internship, co-op, research, capstone or portfolio work to demonstrate current engineering practice and collaboration.' },
+      { title: 'Show verification and testing', detail: 'Add examples of how designs were checked through simulation, calculation, prototype testing, inspection or root-cause analysis.' }
+    ],
+    certifications: [],
+    roadmap: [
+      { period: '30 days', items: ['Create a portfolio page for the aircraft and mechanical design projects with drawings, calculations, tools used and outcomes.', 'Rewrite resume bullets around engineering decisions, not only software names.', 'Compare current Mechanical Engineer postings and identify recurring gaps such as GD&T, FEA, thermal analysis, testing or specific CAD platforms.'] },
+      { period: '6 months', items: ['Complete one recent mechanical design/analysis project that includes requirements, calculations, CAD, analysis and validation.', 'Gain current internship, co-op, lab or research evidence if possible.', 'Strengthen the most repeated technical gap from target job postings.'] },
+      { period: '1 year', items: ['Maintain a focused mechanical engineering portfolio with quantified project outcomes.', 'Build references from instructors, project leads, internship supervisors or engineering collaborators.', 'Reassess target industries, salary and role requirements using current market data.'] }
+    ],
+    resources: [
+      { name: 'ASME', purpose: 'Mechanical engineering standards, technical communities and career resources.', url: 'https://www.asme.org/' },
+      ...commonResources
+    ]
+  },
+  'mechanical design engineer': {
+    advancement: [
+      { title: 'Build a design portfolio', detail: 'Present Siemens NX, Creo, AutoCAD and other CAD work with design intent, constraints, iterations and final outcomes.' },
+      { title: 'Show engineering drawing quality', detail: 'Include drawings, dimensions, tolerances, assemblies and manufacturing considerations where appropriate.' },
+      { title: 'Connect simulation to design choices', detail: 'Explain how MATLAB, ANSYS or other analysis changed the design, reduced risk or improved performance.' },
+      { title: 'Add recent design validation evidence', detail: 'Use prototype testing, fabrication, fit checks or structured design reviews to show that designs were verified.' }
+    ],
+    certifications: [],
+    roadmap: [
+      { period: '30 days', items: ['Create a small portfolio with 3 to 5 design examples, including the aircraft fuselage and mechanical sculpture.', 'For each project, show problem, constraints, CAD tool, analysis, design iterations and outcome.', 'Review Mechanical Design Engineer postings for recurring requirements such as GD&T, tolerance analysis, DFM/DFA and PLM.'] },
+      { period: '6 months', items: ['Complete one polished end-to-end design project from requirements through CAD, drawing, analysis and prototype/validation.', 'Strengthen GD&T, tolerance analysis or DFM/DFA if they recur in target postings.', 'Seek recent design-team, internship, research or freelance/volunteer engineering evidence.'] },
+      { period: '1 year', items: ['Maintain an employer-ready design portfolio and update it with current work.', 'Target Mechanical Design Engineer, CAD Engineer and Product Design Engineer roles that match the strongest evidence.', 'Reassess tools, industries and market requirements using current job postings.'] }
+    ],
+    resources: [
+      { name: 'ASME', purpose: 'Mechanical design, standards and professional-development resources.', url: 'https://www.asme.org/' },
+      ...commonResources
+    ]
+  },
+  'product design engineer': {
+    advancement: [
+      { title: 'Show user-to-design reasoning', detail: 'Document how requirements, use cases and constraints became design decisions and prototypes.' },
+      { title: 'Strengthen prototyping evidence', detail: 'Use CAD, 3D printing, fabrication and testing to show iterative product development.' },
+      { title: 'Document tradeoffs', detail: 'Explain performance, manufacturability, cost, weight, reliability and usability tradeoffs.' },
+      { title: 'Build cross-functional evidence', detail: 'Show collaboration with manufacturing, testing, customers, instructors or project teammates.' }
+    ],
+    certifications: [],
+    roadmap: [
+      { period: '30 days', items: ['Turn the strongest design projects into product-development case studies.', 'Add photos, drawings or diagrams where available and describe design iterations and validation.', 'Review Product Design Engineer postings for recurring gaps.'] },
+      { period: '6 months', items: ['Complete one new prototype-driven project with documented requirements, iterations and testing.', 'Build evidence of DFM/DFA, tolerance decisions or supplier/manufacturing constraints.', 'Seek recent product-development teamwork through internship, lab, competition or portfolio work.'] },
+      { period: '1 year', items: ['Maintain a portfolio that demonstrates several complete design cycles.', 'Target product, mechanical design and development roles aligned with the portfolio.', 'Reassess market requirements and update the plan.'] }
+    ],
+    resources: [
+      { name: 'ASME', purpose: 'Engineering design and professional-development resources.', url: 'https://www.asme.org/' },
+      ...commonResources
+    ]
+  },
+  'hvac engineer': {
+    advancement: [
+      { title: 'Strengthen HVAC calculation evidence', detail: 'Document load calculations, assumptions, building inputs and engineering recommendations from HVAC work.' },
+      { title: 'Connect coursework to building systems', detail: 'Show how thermodynamics and heat-transfer knowledge supports HVAC analysis and equipment decisions.' },
+      { title: 'Add current codes and standards exposure', detail: 'Identify the codes, standards and design practices most often requested in target HVAC roles.' },
+      { title: 'Build recent building-systems experience', detail: 'Use an internship, academic project or portfolio case study to demonstrate current HVAC design and analysis.' }
+    ],
+    certifications: [],
+    roadmap: [
+      { period: '30 days', items: ['Create an HVAC case study from the 142,000 sq. ft. building analysis, including assumptions, Excel calculations and recommendations.', 'Review target HVAC Engineer postings and note recurring requirements such as Revit, AutoCAD, energy codes, ASHRAE knowledge and load software.', 'Make heat transfer and thermodynamics evidence explicit if present in academic records.'] },
+      { period: '6 months', items: ['Complete one recent HVAC/building-systems analysis or design project.', 'Strengthen the most common tool or standards gap from target postings.', 'Seek recent internship, co-op or project exposure to building mechanical systems.'] },
+      { period: '1 year', items: ['Maintain a small HVAC portfolio with load calculations, drawings and design rationale.', 'Target HVAC/Mechanical Engineer and building-systems roles aligned with the evidence.', 'Reassess salary, codes, tools and market requirements using current sources.'] }
+    ],
+    resources: [
+      { name: 'ASHRAE', purpose: 'Building-systems, HVAC standards, education and technical resources.', url: 'https://www.ashrae.org/' },
+      { name: 'ASME', purpose: 'Mechanical engineering professional resources.', url: 'https://www.asme.org/' },
+      ...commonResources
+    ]
+  }
+};
+
+const epmStrongGuidance = {
   advancement: [
-    { title: 'Document project leadership outcomes', detail: 'Turn major engineering assignments into concise project case studies with scope, budget, schedule, team size, risk controls, stakeholder coordination, and measurable results.' },
-    { title: 'Strengthen U.S.-market project-management evidence', detail: 'Translate international engineering experience into terminology commonly used in U.S. project-management job descriptions, including governance, schedule control, cost control, change management, risk registers, and stakeholder reporting.' },
-    { title: 'Add a recognized project-management credential if useful', detail: 'Your core fit is already strong. A credential such as PMP can strengthen market signaling, but it should be treated as an advancement credential rather than a missing core skill.' },
-    { title: 'Build current digital-delivery evidence', detail: 'Show recent use of project dashboards, scheduling/reporting tools, analytics, and executive communication so the profile demonstrates both deep engineering experience and current delivery practices.' }
+    { title: 'Document project leadership outcomes', detail: 'Turn major engineering assignments into concise project case studies with scope, budget, schedule, team size, risk controls, stakeholder coordination and measurable results.' },
+    { title: 'Strengthen U.S.-market project-management evidence', detail: 'Translate experience into governance, schedule control, cost control, change management, risk-register and stakeholder-reporting language used in target postings.' },
+    { title: 'Add a recognized project-management credential if useful', detail: 'A credential such as PMP can strengthen market signaling, but it is an advancement credential rather than a substitute for evidence.' },
+    { title: 'Build current digital-delivery evidence', detail: 'Show recent use of project dashboards, scheduling/reporting tools, analytics and executive communication.' }
   ],
   certifications: [
-    { name: 'Project Management Professional (PMP)', provider: 'Project Management Institute (PMI)', note: 'Optional but high-value market credential for experienced project leaders. Your experience should be reviewed against PMI eligibility requirements.', url: 'https://www.pmi.org/certifications/project-management-pmp' },
-    { name: 'PMI Agile Certified Practitioner (PMI-ACP)', provider: 'Project Management Institute (PMI)', note: 'Optional if you want to demonstrate agile or hybrid delivery capability alongside traditional engineering project management.', url: 'https://www.pmi.org/certifications/agile-acp' }
+    { name: 'Project Management Professional (PMP)', provider: 'Project Management Institute (PMI)', note: 'Optional for a strong-fit experienced project leader. Review current PMI eligibility requirements before planning for the exam.', url: 'https://www.pmi.org/certifications/project-management-pmp' }
   ],
   roadmap: [
-    { period: '30 days', items: [
-      'Create 3 to 5 project case studies from your engineering history. For each, capture scope, budget or asset value if available, schedule responsibility, team/stakeholder role, major risks, HSE controls, and final outcome.',
-      'Rewrite the resume summary and project bullets around Engineering Project Manager responsibilities rather than only the Electrical Engineer job title.',
-      'Build a one-page competency evidence matrix covering project management, stakeholder collaboration, budget management, HSE, team leadership, and risk management.',
-      'Review current Engineering Project Manager job postings and note recurring requirements that are not yet demonstrated in your evidence.'
-    ]},
-    { period: '6 months', items: [
-      'Complete a recognized project-management credential or structured preparation path if it materially improves your target job market.',
-      'Add recent evidence of scheduling, reporting, dashboarding, change control, and executive communication through work, volunteer, academic, or portfolio projects.',
-      'Develop a U.S.-focused accomplishment resume and LinkedIn profile using quantified project outcomes and leadership evidence.',
-      'Apply selectively to engineering project manager, electrical project manager, utility project manager, and power-project leadership roles that align with your domain background.'
-    ]},
-    { period: '1 year', items: [
-      'Establish a documented portfolio of project outcomes with measurable delivery, safety, cost, schedule, and stakeholder results.',
-      'Build professional references and network connections in utilities, infrastructure, consulting, construction, and engineering project delivery.',
-      'Target roles with increasing responsibility for portfolio governance, capital programs, multi-project delivery, or engineering management.',
-      'Reassess salary, location, credentials, and role requirements using current market data and update the career plan.'
-    ]}
+    { period: '30 days', items: ['Create 3 to 5 quantified engineering project case studies.', 'Rewrite the resume around project outcomes, governance, cost, schedule, risk and stakeholders.', 'Build a competency evidence matrix for the mapped core skills.'] },
+    { period: '6 months', items: ['Add recent scheduling, reporting, dashboarding and change-control evidence.', 'Pursue a project-management credential only if it materially improves the target market.', 'Apply selectively to roles aligned with the engineering domain background.'] },
+    { period: '1 year', items: ['Maintain a documented portfolio of project outcomes.', 'Build professional references and network connections in the target industry.', 'Reassess salary, credentials and advancement requirements using current market data.'] }
   ],
   resources: [
-    { name: 'PMI Project Management Professional (PMP)', purpose: 'Credential requirements, exam information, and official preparation guidance.', url: 'https://www.pmi.org/certifications/project-management-pmp' },
-    { name: 'PMI Standards and Publications', purpose: 'Reference material for project-management practices, terminology, and standards.', url: 'https://www.pmi.org/pmbok-guide-standards' },
-    { name: 'O*NET Online', purpose: 'Review occupational tasks, knowledge, skills, and related job titles for management and engineering roles.', url: 'https://www.onetonline.org/' },
-    { name: 'U.S. Bureau of Labor Statistics Occupational Employment and Wage Statistics', purpose: 'Validate wage and employment information when the app has a confirmed occupational mapping.', url: 'https://www.bls.gov/oes/' }
+    { name: 'PMI Project Management Professional (PMP)', purpose: 'Official credential requirements and exam information.', url: 'https://www.pmi.org/certifications/project-management-pmp' },
+    ...commonResources
   ]
 };
 
-const guidanceFor = (rec) => {
-  if (normalize(rec?.path || rec?.career_title) === 'engineering project manager') return engineeringProjectManagerGuidance;
+const genericGuidance = (rec) => {
+  const missing = safeArray(rec?.missing_skills);
   return {
-    advancement: safeArray(rec?.missing_skills).length
-      ? safeArray(rec.missing_skills).map((skill) => ({ title: `Build stronger evidence for ${skill}`, detail: `Add coursework, project evidence, certification evidence, or recent work demonstrating ${skill}.` }))
-      : [{ title: 'Strengthen evidence quality', detail: 'You already demonstrate the mapped core competencies. Focus on recent, quantified, and independently verifiable evidence rather than inventing additional skill gaps.' }],
+    advancement: missing.length
+      ? missing.map((skill) => ({ title: `Build evidence for ${skill}`, detail: `Use coursework, a project, internship, certification or recent work to demonstrate ${skill} in a way that can be reviewed by an employer.` }))
+      : [{ title: 'Strengthen evidence quality', detail: 'The mapped competencies are present. Focus next on recent, quantified and independently reviewable evidence, especially professional or project outcomes.' }],
     certifications: safeArray(rec?.recommended_certifications),
     roadmap: [
-      { period: '30 days', items: ['Document your strongest career-relevant accomplishments and update your resume evidence.', 'Review current job requirements and compare them with your evidence.'] },
-      { period: '6 months', items: ['Close any evidence or credential gaps that appear repeatedly in target job postings.', 'Build recent project or portfolio evidence for the target role.'] },
-      { period: '1 year', items: ['Reassess career fit, market demand, salary, and advancement options using updated evidence.'] }
+      { period: '30 days', items: ['Document the strongest career-relevant accomplishments and update the resume evidence.', 'Review current job requirements and compare them with the saved evidence.'] },
+      { period: '6 months', items: ['Close the most repeated evidence or credential gaps in target job postings.', 'Build recent project, internship, portfolio or professional evidence for the target role.'] },
+      { period: '1 year', items: ['Reassess career fit, market demand, salary and advancement options using updated evidence.'] }
     ],
-    resources: safeArray(rec?.learning_resources)
+    resources: commonResources
   };
+};
+
+const guidanceFor = (rec) => {
+  const key = normalize(rec?.path || rec?.career_title);
+  if (mechanicalGuidance[key]) return mechanicalGuidance[key];
+  if (key === 'engineering project manager' && matchPercent(rec) >= 75 && safeArray(rec?.missing_skills).length <= 1) return epmStrongGuidance;
+  return genericGuidance(rec);
+};
+
+const displayReason = (rec) => {
+  const reason = String(rec?.match_reason || '').trim();
+  if (!reason) return '';
+  return reason.replace('relevant education/training evidence but no detected professional experience in this career domain', 'relevant academic, project, and transferable skill evidence but no detected professional experience in this career domain');
 };
 
 const CareerRecommendations = ({ skills, user, onBack }) => {
@@ -111,30 +208,20 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setLoading(true);
-      setError(null);
+      setLoading(true); setError(null);
       try {
         const saved = safeArray(skills?.recommendations);
-        if (saved.length) {
-          if (!cancelled) setRecommendations(saved);
-          return;
-        }
+        if (saved.length) { if (!cancelled) setRecommendations(saved); return; }
         const evidence = safeArray(skills?.extracted_skills);
-        if (!evidence.length) {
-          if (!cancelled) setRecommendations([]);
-          return;
-        }
+        if (!evidence.length) { if (!cancelled) setRecommendations([]); return; }
         const response = await fetch(`${apiBase()}/api/recommendations`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ extracted_skills: evidence })
         });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.detail || `Career recommendation request failed (${response.status})`);
         if (!cancelled) setRecommendations(safeArray(body.recommendations));
-      } catch (err) {
-        if (!cancelled) setError(err?.message || 'Unable to calculate Career Intelligence.');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      } catch (err) { if (!cancelled) setError(err?.message || 'Unable to calculate Career Intelligence.'); }
+      finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
   }, [skills]);
@@ -153,14 +240,9 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
           const response = await fetch(`${apiBase()}/api/market-data?career_title=${encodeURIComponent(career.path || career.career_title || '')}`);
           const body = await response.json().catch(() => ({}));
           if (response.ok && body.status === 'success') next[career.id || career.path || career.career_title] = body.market_data;
-        } catch (err) {
-          console.warn('Market enrichment unavailable:', err);
-        }
+        } catch (err) { console.warn('Market enrichment unavailable:', err); }
       }));
-      if (!cancelled) {
-        setMarketData((current) => ({ ...current, ...next }));
-        setMarketLoading(false);
-      }
+      if (!cancelled) { setMarketData((current) => ({ ...current, ...next })); setMarketLoading(false); }
     })();
     return () => { cancelled = true; };
   }, [rankedRecommendations]);
@@ -171,7 +253,6 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
     return bls?.available && bls.mean_annual_wage ? currency(bls.mean_annual_wage) : (rec?.median_salary || 'Not available');
   };
   const salarySource = (rec) => marketFor(rec)?.bls?.available ? 'Current BLS/OEWS mapping returned by the market service' : 'Catalog/reference estimate. Verify before making a salary decision.';
-
   const courseAlignment = (rec) => {
     const missing = safeArray(rec?.missing_skills);
     return userCourses.map((course) => {
@@ -180,7 +261,6 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
       return { ...course, addressed };
     }).filter((course) => course.addressed.length > 0);
   };
-
   const verificationBadge = (skillName) => {
     const item = userSkills.find((skill) => normalize(skill.skill_name) === normalize(skillName));
     if (!item) return null;
@@ -189,7 +269,6 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
     if (item.verification_status === 'certificate_extracted_unverified') return 'Certificate evidence';
     return 'Tracked';
   };
-
   const hasFormalDegree = safeArray(skills?.education || skills?.structured_evidence?.education).some((item) => /bachelor|b\.sc|bsc|master|m\.sc|phd|doctor/i.test(`${item?.program_or_degree || ''} ${item?.field_of_study || ''}`));
 
   if (loading) return <div className="app-card flex min-h-[420px] items-center justify-center p-8"><p className="font-semibold text-slate-600">Building Career Intelligence from your saved evidence…</p></div>;
@@ -197,12 +276,12 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
 
   return <div className="space-y-6">
     <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-950 via-slate-950 to-teal-950 p-6 text-white shadow-xl sm:p-8">
-      <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-teal-300">Career Intelligence</p><h2 className="mt-2 text-3xl font-black">{bestCareer ? `Best current fit: ${bestCareer.path || bestCareer.career_title}` : 'Build a stronger evidence profile'}</h2><p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">Core career fit and career-development opportunities are shown separately. A strong fit does not mean there is nothing left to strengthen.</p></div><button onClick={onBack} className="rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-bold">Back</button></div>
+      <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-teal-300">Career Intelligence</p><h2 className="mt-2 text-3xl font-black">{bestCareer ? `Best current fit: ${bestCareer.path || bestCareer.career_title}` : 'Build a stronger evidence profile'}</h2><p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">Compare current fit, evidence, market information and practical next steps for each career path.</p></div><button onClick={onBack} className="rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-bold">Back</button></div>
     </section>
 
     {bestCareer && <>
       <section className="grid gap-4 lg:grid-cols-4">
-        <div className="app-card p-5 lg:col-span-2"><p className="text-xs font-bold uppercase tracking-[0.14em] text-indigo-600">Career snapshot</p><h3 className="mt-2 text-2xl font-black text-slate-950">{bestCareer.path}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{bestCareer.match_reason}</p></div>
+        <div className="app-card p-5 lg:col-span-2"><p className="text-xs font-bold uppercase tracking-[0.14em] text-indigo-600">Career snapshot</p><h3 className="mt-2 text-2xl font-black text-slate-950">{bestCareer.path}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{displayReason(bestCareer)}</p></div>
         <div className="app-card p-5"><p className="text-xs font-bold uppercase text-slate-400">Match</p><p className="mt-2 text-4xl font-black text-indigo-700">{matchPercent(bestCareer)}%</p><p className="mt-1 text-xs text-slate-500">Evidence-based fit</p></div>
         <div className="app-card p-5"><p className="text-xs font-bold uppercase text-slate-400">Annual wage</p><p className="mt-2 text-2xl font-black text-slate-950">{salaryFor(bestCareer)}</p><p className="mt-1 text-xs text-slate-500">{salarySource(bestCareer)}</p></div>
       </section>
@@ -212,25 +291,26 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
       <section className="space-y-4">{rankedRecommendations.map((rec,index)=>{
         const matched=safeArray(rec.matched_skills), missing=safeArray(rec.missing_skills), aligned=courseAlignment(rec), market=marketFor(rec), guidance=guidanceFor(rec);
         const open=selectedCareer?.id===rec.id||(!rec.id&&selectedCareer?.path===rec.path);
+        const strongCore = missing.length === 0;
         return <article key={rec.id||rec.path} className={`app-card overflow-hidden ${index===0?'border-indigo-200':''}`}>
-          <div className="p-6"><div className="flex flex-col gap-4 md:flex-row md:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-xl font-bold">{rec.path}</h3>{index===0&&<span className="rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-bold text-indigo-800">Top match</span>}</div><p className="mt-2 text-sm text-slate-600">{rec.match_reason}</p></div><span className="text-3xl font-black text-indigo-700">{matchPercent(rec)}%</span></div>
-          <div className="mt-5 grid gap-5 md:grid-cols-2"><div><p className="text-sm font-bold text-emerald-800">Matching evidence</p><div className="mt-2 flex flex-wrap gap-2">{matched.map((item)=><span key={item} className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800"><span>{item}</span>{verificationBadge(item)&&<span className="text-emerald-600">· {verificationBadge(item)}</span>}</span>)}</div></div><div><p className="text-sm font-bold text-amber-800">Core competency gaps</p><div className="mt-2 flex flex-wrap gap-2">{missing.length?missing.map((item)=><span key={item} className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">{item}</span>):<span className="text-sm text-slate-500">No mapped core competency gaps. See Career advancement for the next level of development.</span>}</div></div></div>
+          <div className="p-6"><div className="flex flex-col gap-4 md:flex-row md:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-xl font-bold">{rec.path}</h3>{index===0&&<span className="rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-bold text-indigo-800">Top match</span>}</div><p className="mt-2 text-sm text-slate-600">{displayReason(rec)}</p></div><span className="text-3xl font-black text-indigo-700">{matchPercent(rec)}%</span></div>
+          <div className="mt-5 grid gap-5 md:grid-cols-2"><div><p className="text-sm font-bold text-emerald-800">Matching evidence</p><div className="mt-2 flex flex-wrap gap-2">{matched.map((item)=><span key={item} className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800"><span>{item}</span>{verificationBadge(item)&&<span className="text-emerald-600">· {verificationBadge(item)}</span>}</span>)}</div></div><div><p className="text-sm font-bold text-amber-800">Core competency gaps</p><div className="mt-2 flex flex-wrap gap-2">{missing.length?missing.map((item)=><span key={item} className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">{item}</span>):<span className="text-sm text-slate-500">No mapped core competency gaps. The next focus is stronger evidence, experience and market readiness.</span>}</div></div></div>
           {aligned.length>0&&<div className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-4"><p className="text-sm font-bold text-sky-900">Current courses already address gaps</p>{aligned.map((course)=><p key={course.id||course.course_name} className="mt-1 text-sm text-sky-800"><strong>{course.course_name}</strong>: {course.addressed.join(', ')}</p>)}</div>}
           <button onClick={()=>{setSelectedCareer(open?null:rec);setActiveTab('overview');}} className="mt-5 w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white">{open?'Hide details':'View details & roadmap'}</button></div>
 
           {open&&<div className="border-t bg-slate-50/60 p-6"><div className="flex gap-2 overflow-x-auto">{['overview','market','certifications','degrees','next-steps','resources'].map((tab)=><button key={tab} onClick={()=>setActiveTab(tab)} className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold ${activeTab===tab?'bg-indigo-600 text-white':'bg-white text-slate-600'}`}>{tab==='next-steps'?'roadmap':tab}</button>)}</div>
 
-          {activeTab==='overview'&&<div className="mt-5 space-y-4"><div className="rounded-xl border border-indigo-100 bg-indigo-50 p-4"><h4 className="font-bold text-indigo-950">Why this career fits</h4><p className="mt-2 text-sm leading-6 text-indigo-900">{rec.match_reason} Your core-fit score remains {matchPercent(rec)}%. The items below are advancement opportunities, not invented missing competencies.</p></div><div><h4 className="font-bold">Career advancement opportunities</h4><div className="mt-3 grid gap-3 md:grid-cols-2">{guidance.advancement.map((item)=><div key={item.title} className="rounded-xl bg-white p-4"><p className="font-bold">{item.title}</p><p className="mt-2 text-sm leading-6 text-slate-600">{item.detail}</p></div>)}</div></div></div>}
+          {activeTab==='overview'&&<div className="mt-5 space-y-4"><div className="rounded-xl border border-indigo-100 bg-indigo-50 p-4"><h4 className="font-bold text-indigo-950">Why this career fits</h4><p className="mt-2 text-sm leading-6 text-indigo-900">{displayReason(rec)} Your current evidence-based fit is {matchPercent(rec)}%.</p></div><div><h4 className="font-bold">{strongCore ? 'Career advancement opportunities' : 'Priority development areas'}</h4><div className="mt-3 grid gap-3 md:grid-cols-2">{guidance.advancement.map((item)=><div key={item.title} className="rounded-xl bg-white p-4"><p className="font-bold">{item.title}</p><p className="mt-2 text-sm leading-6 text-slate-600">{item.detail}</p></div>)}</div></div></div>}
 
           {activeTab==='market'&&<div className="mt-5 grid gap-3 md:grid-cols-2"><div className="rounded-xl bg-white p-4"><p className="text-xs font-bold uppercase text-slate-400">Annual wage</p><p className="mt-1 text-xl font-bold">{salaryFor(rec)}</p><p className="mt-2 text-xs text-slate-500">{salarySource(rec)}</p></div><div className="rounded-xl bg-white p-4"><p className="text-xs font-bold uppercase text-slate-400">National employment</p><p className="mt-1 text-xl font-bold">{market?.bls?.available?integer(market.bls.employment):'Not available'}</p></div>{market?.onet?.available&&<div className="rounded-xl bg-white p-4 md:col-span-2"><p className="font-bold">{market.onet.occupation_title}</p><p className="mt-2 text-sm leading-6 text-slate-600">{market.onet.description}</p></div>}<div className="rounded-xl border border-sky-100 bg-sky-50 p-4 md:col-span-2"><p className="text-sm text-sky-900">Market figures are shown only when the backend returns a confirmed BLS/O*NET mapping. Catalog estimates are labeled separately and should be verified before salary or relocation decisions.</p></div></div>}
 
-          {activeTab==='certifications'&&<div className="mt-5 space-y-3"><div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-900">Certifications are treated as market-signaling and advancement credentials. They do not reduce your current core-fit score when the six mapped competencies are already evidenced.</div>{safeArray(guidance.certifications).length?guidance.certifications.map((item,i)=><div key={`${item.name||item}-${i}`} className="rounded-xl bg-white p-4"><p className="font-bold">{item.name||item}</p>{item.provider&&<p className="mt-1 text-sm text-slate-500">{item.provider}</p>}{item.note&&<p className="mt-2 text-sm leading-6 text-slate-600">{item.note}</p>}{item.url&&<a className="mt-3 inline-block text-sm font-semibold text-indigo-600" href={item.url} target="_blank" rel="noreferrer">Official page</a>}</div>):<p className="text-sm text-slate-500">No certification recommendation is required for this path.</p>}</div>}
+          {activeTab==='certifications'&&<div className="mt-5 space-y-3"><div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-900">{strongCore ? 'Certifications can strengthen market signaling, but they are not being treated as missing core competencies.' : 'Certifications may help with specific gaps or employer requirements, but they should support real skill evidence rather than replace it.'}</div>{safeArray(guidance.certifications).length?guidance.certifications.map((item,i)=><div key={`${item.name||item}-${i}`} className="rounded-xl bg-white p-4"><p className="font-bold">{item.name||item}</p>{item.provider&&<p className="mt-1 text-sm text-slate-500">{item.provider}</p>}{item.note&&<p className="mt-2 text-sm leading-6 text-slate-600">{item.note}</p>}{item.url&&<a className="mt-3 inline-block text-sm font-semibold text-indigo-600" href={item.url} target="_blank" rel="noreferrer">Official page</a>}</div>):<p className="text-sm text-slate-500">No certification is currently required by this evidence model. Review target job postings before choosing a credential.</p>}</div>}
 
-          {activeTab==='degrees'&&<div className="mt-5 rounded-xl bg-white p-5"><h4 className="font-bold">Degree guidance</h4>{normalize(rec.path)==='engineering project manager'&&hasFormalDegree?<p className="mt-2 text-sm leading-6 text-slate-600">Your saved resume already contains a formal engineering degree. An additional degree is not being treated as a requirement for this career match. Further graduate study may still be useful for a specific employer, leadership track, or long-term goal, but it should be a strategic choice rather than a default recommendation.</p>:safeArray(rec.recommended_degrees).length?<div className="mt-3 space-y-3">{safeArray(rec.recommended_degrees).map((item,i)=><div key={`${item.name||item}-${i}`}><p className="font-semibold">{item.name||item}</p><p className="text-sm text-slate-500">{[item.type,item.duration,item.format].filter(Boolean).join(' · ')}</p></div>)}</div>:<p className="mt-2 text-sm text-slate-600">No additional degree is specified as necessary from the current evidence.</p>}</div>}
+          {activeTab==='degrees'&&<div className="mt-5 rounded-xl bg-white p-5"><h4 className="font-bold">Degree guidance</h4>{hasFormalDegree?<p className="mt-2 text-sm leading-6 text-slate-600">Your saved resume already contains a formal degree. An additional degree is not being treated as a requirement for this career match. Further study may still be useful for a specific employer, specialization or long-term goal, but it should be a strategic choice rather than a default recommendation.</p>:safeArray(rec.recommended_degrees).length?<div className="mt-3 space-y-3">{safeArray(rec.recommended_degrees).map((item,i)=><div key={`${item.name||item}-${i}`}><p className="font-semibold">{item.name||item}</p><p className="text-sm text-slate-500">{[item.type,item.duration,item.format].filter(Boolean).join(' · ')}</p></div>)}</div>:<p className="mt-2 text-sm text-slate-600">No additional degree is specified as necessary from the current evidence.</p>}</div>}
 
           {activeTab==='next-steps'&&<div className="mt-5 grid gap-4 lg:grid-cols-3">{guidance.roadmap.map((group)=><div key={group.period} className="rounded-xl bg-white p-4"><p className="text-xs font-bold uppercase tracking-[0.12em] text-indigo-600">{group.period}</p><div className="mt-3 space-y-3">{group.items.map((step,i)=><div key={`${group.period}-${i}`} className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{i+1}</span><p className="text-sm leading-6 text-slate-700">{step}</p></div>)}</div></div>)}</div>}
 
-          {activeTab==='resources'&&<div className="mt-5 space-y-3">{safeArray(guidance.resources).length?guidance.resources.map((item,i)=><div key={`${item.name||item}-${i}`} className="rounded-xl bg-white p-4"><p className="font-bold">{item.name||item}</p>{item.purpose&&<p className="mt-2 text-sm text-slate-600">{item.purpose}</p>}{item.url&&<a className="mt-3 inline-block text-sm font-semibold text-indigo-600" href={item.url} target="_blank" rel="noreferrer">Open resource</a>}</div>):<p className="text-sm text-slate-500">No learning resources are attached to this career yet.</p>}</div>}
+          {activeTab==='resources'&&<div className="mt-5 space-y-3">{safeArray(guidance.resources).map((item,i)=><div key={`${item.name||item}-${i}`} className="rounded-xl bg-white p-4"><p className="font-bold">{item.name||item}</p>{item.purpose&&<p className="mt-2 text-sm text-slate-600">{item.purpose}</p>}{item.url&&<a className="mt-3 inline-block text-sm font-semibold text-indigo-600" href={item.url} target="_blank" rel="noreferrer">Open resource</a>}</div>)}</div>}
           </div>}
         </article>;
       })}</section>
