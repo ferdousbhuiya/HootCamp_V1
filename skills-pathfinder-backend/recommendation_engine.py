@@ -32,6 +32,34 @@ SKILL_ALIASES={
  "autocad electrical":"autocad","overhead line":"overhead lines","underground cable":"underground cabling"
 }
 
+STRUCTURED_SKILL_TERMS={
+ 'project management':['project management','project coordination','coordinated and supervised projects','managed engineering design','project activities','concept to completion','start-up and acceptance'],
+ 'power distribution':['power distribution','33/11/0.415 kv','distribution network','distribution across urban and rural networks'],
+ 'mv electrical power distribution':['33/11','11 kv','medium voltage','mv electrical power distribution','power distribution'],
+ 'overhead lines':['overhead line','overhead lines'],
+ 'underground cabling':['underground cabling','underground cable'],
+ 'hse compliance':['hse','health safety environment','health safety and environment'],
+ 'autocad':['autocad','schematics'],
+ 'troubleshooting':['troubleshoot','diagnostics','diagnostic','fault'],
+ 'team leadership':['team leadership','led ','directed ','supervised ','cross-functional'],
+ 'stakeholder collaboration':['stakeholder collaboration','stakeholder','collaborative environment'],
+ 'budget management':['budget planning','budget management','budget'],
+ 'risk management':['risk management','risk'],
+ 'selenium':['selenium'],
+ 'java':['java'],
+ 'sql':['sql'],
+ 'software testing':['software testing'],
+ 'automation':['automation'],
+ 'python':['python'],
+ 'power bi':['power bi'],
+ 'tableau':['tableau'],
+ 'data analytics':['data analytics','advanced data analytics'],
+ 'excel':['advanced excel','microsoft excel','excel'],
+ 'electrical systems':['electrical systems','electrical engineering','electrical power'],
+ 'mechanical systems':['mechanical systems','mechanical'],
+ 'solar power system installation':['solar power','solar power system']
+}
+
 def _normalize_text(value:Any)->str:
  text=str(value or '').strip().lower().replace('&',' and ')
  text=re.sub(r'[^a-z0-9+#./ -]+',' ',text); text=re.sub(r'\s+',' ',text).strip(' ./-')
@@ -74,6 +102,8 @@ def _match_required_skill(required_skill,skill_index):
   if candidate in skill_index:return skill_index[candidate]
  return None
 
+def safe_list(value):return value if isinstance(value,list) else []
+
 def _record_text(item:Dict[str,Any])->str:
  values=[]
  for key in ('role','employer','program_or_degree','field_of_study','institution','name','description','title','citation','evidence'):
@@ -83,6 +113,23 @@ def _record_text(item:Dict[str,Any])->str:
   v=item.get(key)
   if isinstance(v,list):values.extend(str(x) for x in v)
  return _normalize_text(' '.join(values))
+
+def _all_structured_text(evidence:Dict[str,Any])->str:
+ parts=[]
+ for key in ('education','experience','projects','project_accomplishments','publications','certifications','courses'):
+  for item in safe_list(evidence.get(key)):
+   if isinstance(item,dict):parts.append(_record_text(item))
+ return ' '.join(parts)
+
+def _match_structured_required(required_skill,evidence):
+ key=_normalize_text(required_skill); text=_all_structured_text(evidence)
+ if not text:return None
+ terms=STRUCTURED_SKILL_TERMS.get(key,[key])
+ for term in terms:
+  normalized=_normalize_text(term)
+  if normalized and normalized in text:
+   return {'name':required_skill,'confidence':.88,'category':'Structured Resume Evidence','source':'structured_resume'}
+ return None
 
 def _contains_domain(text:str,terms:List[str])->bool:
  raw=_normalize_text(text)
@@ -125,7 +172,8 @@ def _score_career(extracted_skills,career,structured_evidence=None):
  evidence=structured_evidence or {}; index=_build_skill_index(extracted_skills); required=career.get('required_skills') or []
  matched=[]; missing=[]; details=[]; earned=total=0.
  for req in required:
-  w=_required_skill_weight(career,req); total+=w; e=_match_required_skill(req,index)
+  w=_required_skill_weight(career,req); total+=w
+  e=_match_required_skill(req,index) or _match_structured_required(req,evidence)
   if e:
    matched.append(req); factor=.65+.35*e['confidence']; earned+=w*factor
    details.append({'required_skill':req,'evidence_skill':e['name'],'confidence':round(e['confidence'],3),'source':e['source'],'weight':round(w,3),'type':'core_competency'})
@@ -137,14 +185,12 @@ def _score_career(extracted_skills,career,structured_evidence=None):
  project_hits=[x for x in projects if _contains_domain(_record_text(x),terms)]
  publication_hits=[x for x in publications if _contains_domain(_record_text(x),terms)]
  years=_relevant_experience_years(experience,terms)
- # Structured evidence contributes up to 35 percentage points, but only when career-domain evidence exists.
  education_credit=.10 if education_hits else 0.
  experience_credit=min(.15,years/10.*.15) if years else 0.
  project_credit=min(.06,len(project_hits)*.02)
  publication_credit=min(.04,len(publication_hits)*.04)
  structured_credit=education_credit+experience_credit+project_credit+publication_credit
  has_domain=bool(education_hits or years or project_hits or publication_hits)
- # Generic skill overlap cannot create an unrelated career path. Require either domain evidence or >=50% core competency coverage.
  coverage=(len(matched)/len(required)) if required else 0.
  eligible=has_domain or coverage>=.50
  score=round(min(1.,core*.70+structured_credit),4) if eligible else 0.
@@ -155,8 +201,6 @@ def _score_career(extracted_skills,career,structured_evidence=None):
  elif education_hits:reason+=' with relevant education evidence.'
  else:reason+='.'
  return {'match_score':score,'match_percentage':pct,'skill_gap_percentage':round((1-score)*100,1),'matched_skills':matched,'missing_skills':missing,'matched_skill_details':details,'domain_evidence':{'education_records':len(education_hits),'relevant_experience_years':years,'project_records':len(project_hits),'publication_records':len(publication_hits),'structured_credit':round(structured_credit,3)},'domain_relevance_percentage':round(structured_credit*100,1),'match_reason':reason,'career_relevant_experience_years':years}
-
-def safe_list(value):return value if isinstance(value,list) else []
 
 def _career_result(career,scoring):
  return {'id':career['id'],'path':career['path'],'category':career['category'],**scoring,'job_outlook':career.get('job_outlook'),'median_salary':career.get('median_salary'),'top_locations':career.get('top_locations') or [],'recommended_certifications':career.get('recommended_certifications') or [],'recommended_degrees':career.get('recommended_degrees') or [],'next_steps':career.get('next_steps') or [],'learning_resources':career.get('learning_resources') or []}
