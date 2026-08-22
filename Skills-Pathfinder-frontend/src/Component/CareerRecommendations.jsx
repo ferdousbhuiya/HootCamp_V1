@@ -1,11 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
-
+const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
 const safeArray = (value) => Array.isArray(value) ? value : [];
 const normalize = (value = '') => String(value).trim().toLowerCase().replace(/[^a-z0-9+#./ -]+/g, ' ').replace(/\s+/g, ' ');
 const apiBase = () => (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -32,7 +28,43 @@ const commonResources = [
   { name: 'U.S. Bureau of Labor Statistics Occupational Employment and Wage Statistics', purpose: 'Validate wage and employment information when the app has a confirmed occupational mapping.', url: 'https://www.bls.gov/oes/' }
 ];
 
-const mechanicalGuidance = {
+const careerGuidance = {
+  'industrial engineer': {
+    advancement: [
+      { title: 'Build a measurable process-improvement case study', detail: 'Use an internship, academic project or portfolio project to show the current process, baseline metrics, analysis, proposed changes and measurable improvement in time, cost, quality, capacity or accuracy.' },
+      { title: 'Strengthen process-mapping and root-cause evidence', detail: 'Document how you map a workflow, identify bottlenecks or waste, investigate root causes and recommend a redesigned process. Connect the work to the process and data evidence already present in your resume.' },
+      { title: 'Turn analytics into operational decisions', detail: 'Use Excel, Power BI, Tableau or another analysis tool to build an operations-focused example such as cycle-time, capacity, quality, inventory, staffing or productivity analysis, then explain the decision supported by the data.' },
+      { title: 'Add exposure to industrial-engineering methods used by target employers', detail: 'Compare target postings for recurring requirements such as Lean, Six Sigma, DMAIC, statistical process control, quality systems, simulation, optimization, ERP/MRP, supply chain or production planning. Strengthen only the areas that repeatedly appear in the roles you want.' }
+    ],
+    certifications: [
+      { name: 'Lean Six Sigma Green Belt', provider: 'IISE or another recognized training provider', note: 'Optional, not a missing core competency. Consider it when target Industrial Engineer or process-improvement roles repeatedly request Lean/Six Sigma or when you can pair the credential with a real improvement project.', url: 'https://www.iise.org/TrainingCenter/' }
+    ],
+    roadmap: [
+      { period: '30 days', items: [
+        'Turn the strongest business-process or internship accomplishment into a one-page Industrial Engineering case study with baseline, method, analysis, recommendation and measurable result.',
+        'Create one process map or workflow analysis that identifies bottlenecks, waste, handoffs, controls and improvement opportunities.',
+        'Review 15 to 20 entry-level Industrial Engineer, Process Engineer and Operations Improvement postings and record recurring requirements such as Lean/Six Sigma, quality, simulation, optimization, ERP/MRP or supply-chain knowledge.',
+        'Rewrite resume bullets so Excel, project planning and process work show measurable operational outcomes rather than tools alone.'
+      ] },
+      { period: '6 months', items: [
+        'Complete one end-to-end improvement project using a structured method such as DMAIC or another evidence-based process-improvement approach and document before/after results.',
+        'Build an operations analytics project using Excel, Power BI, Tableau, Python or another appropriate tool to analyze capacity, cycle time, quality, inventory, staffing or productivity.',
+        'Strengthen the one or two technical areas that recur most often in target postings, such as statistical process control, simulation, optimization, Lean/Six Sigma, quality systems or ERP/MRP.',
+        'Seek internship, co-op, campus, volunteer or consulting work where you can measure and improve a real process.'
+      ] },
+      { period: '1 year', items: [
+        'Maintain a portfolio of two to four Industrial Engineering case studies with process maps, analysis, decisions and quantified outcomes.',
+        'Target Industrial Engineer, Process Engineer, Continuous Improvement, Operations Analyst and related roles that match your strongest evidence.',
+        'Build references from internship supervisors, project leads, faculty or clients who can validate your analytical and process-improvement work.',
+        'Reassess target roles, recurring skill requirements, compensation and credential value using current job postings and verified market data.'
+      ] }
+    ],
+    resources: [
+      { name: 'Institute of Industrial and Systems Engineers (IISE)', purpose: 'Industrial and systems engineering professional development, technical communities, career resources and training.', url: 'https://www.iise.org/' },
+      { name: 'IISE Training Center', purpose: 'Training in Lean, Six Sigma and other industrial-engineering methods. Use it to evaluate optional learning that matches recurring requirements in target jobs.', url: 'https://www.iise.org/TrainingCenter/' },
+      ...commonResources
+    ]
+  },
   'manufacturing engineer': {
     advancement: [
       { title: 'Build recent manufacturing evidence', detail: 'Turn academic and project work into concise case studies that show fabrication, manufacturability, process decisions, quality checks and measurable outcomes.' },
@@ -40,19 +72,13 @@ const mechanicalGuidance = {
       { title: 'Add process-improvement exposure', detail: 'Use an internship, co-op, lab, capstone or portfolio project to demonstrate workflow analysis, root-cause thinking and continuous improvement.' },
       { title: 'Document shop-floor and safety awareness', detail: 'Connect welding, 3D printing, power tools and fabrication work to safe procedures, inspection, quality and production constraints.' }
     ],
-    certifications: [
-      { name: 'Lean / Six Sigma training', provider: 'Employer, university or recognized training provider', note: 'Optional. Useful when target manufacturing roles repeatedly ask for process improvement, quality or continuous-improvement knowledge.' }
-    ],
+    certifications: [{ name: 'Lean / Six Sigma training', provider: 'Employer, university or recognized training provider', note: 'Optional. Useful when target manufacturing roles repeatedly ask for process improvement, quality or continuous-improvement knowledge.' }],
     roadmap: [
       { period: '30 days', items: ['Create two manufacturing-focused project case studies showing design decisions, fabrication steps and measurable results.', 'Update the resume so CAD, 3D printing, welding, troubleshooting and project coordination are tied to outcomes.', 'Review 15 to 20 Manufacturing Engineer postings and record recurring requirements such as DFM, quality, Lean, GD&T, ERP/MRP or process validation.'] },
       { period: '6 months', items: ['Complete a manufacturing, quality or process-improvement project that produces measurable before/after evidence.', 'Gain recent internship, co-op, lab, maker-space or volunteer exposure to real production constraints.', 'Close the most common technical gap found in target postings, such as GD&T, Lean/Six Sigma, quality systems or process documentation.'] },
       { period: '1 year', items: ['Maintain a portfolio of manufacturing projects with drawings, process choices, inspection/quality evidence and outcomes.', 'Target entry-level Manufacturing Engineer, Process Engineer and Design-for-Manufacturing roles aligned with the strongest project evidence.', 'Reassess market requirements and update the career plan using current job postings and verified wage data.'] }
     ],
-    resources: [
-      { name: 'SME', purpose: 'Manufacturing career, technical and professional-development resources.', url: 'https://www.sme.org/' },
-      { name: 'ASME', purpose: 'Mechanical engineering standards, professional development and career resources.', url: 'https://www.asme.org/' },
-      ...commonResources
-    ]
+    resources: [{ name: 'SME', purpose: 'Manufacturing career, technical and professional-development resources.', url: 'https://www.sme.org/' }, { name: 'ASME', purpose: 'Mechanical engineering standards, professional development and career resources.', url: 'https://www.asme.org/' }, ...commonResources]
   },
   'mechanical engineer': {
     advancement: [
@@ -63,14 +89,11 @@ const mechanicalGuidance = {
     ],
     certifications: [],
     roadmap: [
-      { period: '30 days', items: ['Create a portfolio page for the aircraft and mechanical design projects with drawings, calculations, tools used and outcomes.', 'Rewrite resume bullets around engineering decisions, not only software names.', 'Compare current Mechanical Engineer postings and identify recurring gaps such as GD&T, FEA, thermal analysis, testing or specific CAD platforms.'] },
+      { period: '30 days', items: ['Create a portfolio page for the strongest mechanical projects with drawings, calculations, tools used and outcomes.', 'Rewrite resume bullets around engineering decisions, not only software names.', 'Compare current Mechanical Engineer postings and identify recurring gaps such as GD&T, FEA, thermal analysis, testing or specific CAD platforms.'] },
       { period: '6 months', items: ['Complete one recent mechanical design/analysis project that includes requirements, calculations, CAD, analysis and validation.', 'Gain current internship, co-op, lab or research evidence if possible.', 'Strengthen the most repeated technical gap from target job postings.'] },
       { period: '1 year', items: ['Maintain a focused mechanical engineering portfolio with quantified project outcomes.', 'Build references from instructors, project leads, internship supervisors or engineering collaborators.', 'Reassess target industries, salary and role requirements using current market data.'] }
     ],
-    resources: [
-      { name: 'ASME', purpose: 'Mechanical engineering standards, technical communities and career resources.', url: 'https://www.asme.org/' },
-      ...commonResources
-    ]
+    resources: [{ name: 'ASME', purpose: 'Mechanical engineering standards, technical communities and career resources.', url: 'https://www.asme.org/' }, ...commonResources]
   },
   'mechanical design engineer': {
     advancement: [
@@ -81,14 +104,11 @@ const mechanicalGuidance = {
     ],
     certifications: [],
     roadmap: [
-      { period: '30 days', items: ['Create a small portfolio with 3 to 5 design examples, including the aircraft fuselage and mechanical sculpture.', 'For each project, show problem, constraints, CAD tool, analysis, design iterations and outcome.', 'Review Mechanical Design Engineer postings for recurring requirements such as GD&T, tolerance analysis, DFM/DFA and PLM.'] },
+      { period: '30 days', items: ['Create a small portfolio with 3 to 5 design examples.', 'For each project, show problem, constraints, CAD tool, analysis, design iterations and outcome.', 'Review Mechanical Design Engineer postings for recurring requirements such as GD&T, tolerance analysis, DFM/DFA and PLM.'] },
       { period: '6 months', items: ['Complete one polished end-to-end design project from requirements through CAD, drawing, analysis and prototype/validation.', 'Strengthen GD&T, tolerance analysis or DFM/DFA if they recur in target postings.', 'Seek recent design-team, internship, research or freelance/volunteer engineering evidence.'] },
       { period: '1 year', items: ['Maintain an employer-ready design portfolio and update it with current work.', 'Target Mechanical Design Engineer, CAD Engineer and Product Design Engineer roles that match the strongest evidence.', 'Reassess tools, industries and market requirements using current job postings.'] }
     ],
-    resources: [
-      { name: 'ASME', purpose: 'Mechanical design, standards and professional-development resources.', url: 'https://www.asme.org/' },
-      ...commonResources
-    ]
+    resources: [{ name: 'ASME', purpose: 'Mechanical design, standards and professional-development resources.', url: 'https://www.asme.org/' }, ...commonResources]
   },
   'product design engineer': {
     advancement: [
@@ -103,10 +123,7 @@ const mechanicalGuidance = {
       { period: '6 months', items: ['Complete one new prototype-driven project with documented requirements, iterations and testing.', 'Build evidence of DFM/DFA, tolerance decisions or supplier/manufacturing constraints.', 'Seek recent product-development teamwork through internship, lab, competition or portfolio work.'] },
       { period: '1 year', items: ['Maintain a portfolio that demonstrates several complete design cycles.', 'Target product, mechanical design and development roles aligned with the portfolio.', 'Reassess market requirements and update the plan.'] }
     ],
-    resources: [
-      { name: 'ASME', purpose: 'Engineering design and professional-development resources.', url: 'https://www.asme.org/' },
-      ...commonResources
-    ]
+    resources: [{ name: 'ASME', purpose: 'Engineering design and professional-development resources.', url: 'https://www.asme.org/' }, ...commonResources]
   },
   'hvac engineer': {
     advancement: [
@@ -117,15 +134,11 @@ const mechanicalGuidance = {
     ],
     certifications: [],
     roadmap: [
-      { period: '30 days', items: ['Create an HVAC case study from the 142,000 sq. ft. building analysis, including assumptions, Excel calculations and recommendations.', 'Review target HVAC Engineer postings and note recurring requirements such as Revit, AutoCAD, energy codes, ASHRAE knowledge and load software.', 'Make heat transfer and thermodynamics evidence explicit if present in academic records.'] },
+      { period: '30 days', items: ['Create an HVAC case study from the strongest building analysis, including assumptions, calculations and recommendations.', 'Review target HVAC Engineer postings and note recurring requirements such as Revit, AutoCAD, energy codes, ASHRAE knowledge and load software.', 'Make heat transfer and thermodynamics evidence explicit if present in academic records.'] },
       { period: '6 months', items: ['Complete one recent HVAC/building-systems analysis or design project.', 'Strengthen the most common tool or standards gap from target postings.', 'Seek recent internship, co-op or project exposure to building mechanical systems.'] },
       { period: '1 year', items: ['Maintain a small HVAC portfolio with load calculations, drawings and design rationale.', 'Target HVAC/Mechanical Engineer and building-systems roles aligned with the evidence.', 'Reassess salary, codes, tools and market requirements using current sources.'] }
     ],
-    resources: [
-      { name: 'ASHRAE', purpose: 'Building-systems, HVAC standards, education and technical resources.', url: 'https://www.ashrae.org/' },
-      { name: 'ASME', purpose: 'Mechanical engineering professional resources.', url: 'https://www.asme.org/' },
-      ...commonResources
-    ]
+    resources: [{ name: 'ASHRAE', purpose: 'Building-systems, HVAC standards, education and technical resources.', url: 'https://www.ashrae.org/' }, { name: 'ASME', purpose: 'Mechanical engineering professional resources.', url: 'https://www.asme.org/' }, ...commonResources]
   }
 };
 
@@ -136,26 +149,19 @@ const epmStrongGuidance = {
     { title: 'Add a recognized project-management credential if useful', detail: 'A credential such as PMP can strengthen market signaling, but it is an advancement credential rather than a substitute for evidence.' },
     { title: 'Build current digital-delivery evidence', detail: 'Show recent use of project dashboards, scheduling/reporting tools, analytics and executive communication.' }
   ],
-  certifications: [
-    { name: 'Project Management Professional (PMP)', provider: 'Project Management Institute (PMI)', note: 'Optional for a strong-fit experienced project leader. Review current PMI eligibility requirements before planning for the exam.', url: 'https://www.pmi.org/certifications/project-management-pmp' }
-  ],
+  certifications: [{ name: 'Project Management Professional (PMP)', provider: 'Project Management Institute (PMI)', note: 'Optional for a strong-fit experienced project leader. Review current PMI eligibility requirements before planning for the exam.', url: 'https://www.pmi.org/certifications/project-management-pmp' }],
   roadmap: [
     { period: '30 days', items: ['Create 3 to 5 quantified engineering project case studies.', 'Rewrite the resume around project outcomes, governance, cost, schedule, risk and stakeholders.', 'Build a competency evidence matrix for the mapped core skills.'] },
     { period: '6 months', items: ['Add recent scheduling, reporting, dashboarding and change-control evidence.', 'Pursue a project-management credential only if it materially improves the target market.', 'Apply selectively to roles aligned with the engineering domain background.'] },
     { period: '1 year', items: ['Maintain a documented portfolio of project outcomes.', 'Build professional references and network connections in the target industry.', 'Reassess salary, credentials and advancement requirements using current market data.'] }
   ],
-  resources: [
-    { name: 'PMI Project Management Professional (PMP)', purpose: 'Official credential requirements and exam information.', url: 'https://www.pmi.org/certifications/project-management-pmp' },
-    ...commonResources
-  ]
+  resources: [{ name: 'PMI Project Management Professional (PMP)', purpose: 'Official credential requirements and exam information.', url: 'https://www.pmi.org/certifications/project-management-pmp' }, ...commonResources]
 };
 
 const genericGuidance = (rec) => {
   const missing = safeArray(rec?.missing_skills);
   return {
-    advancement: missing.length
-      ? missing.map((skill) => ({ title: `Build evidence for ${skill}`, detail: `Use coursework, a project, internship, certification or recent work to demonstrate ${skill} in a way that can be reviewed by an employer.` }))
-      : [{ title: 'Strengthen evidence quality', detail: 'The mapped competencies are present. Focus next on recent, quantified and independently reviewable evidence, especially professional or project outcomes.' }],
+    advancement: missing.length ? missing.map((skill) => ({ title: `Build evidence for ${skill}`, detail: `Use coursework, a project, internship, certification or recent work to demonstrate ${skill} in a way that can be reviewed by an employer.` })) : [{ title: 'Strengthen evidence quality', detail: 'The mapped competencies are present. Focus next on recent, quantified and independently reviewable evidence, especially professional or project outcomes.' }],
     certifications: safeArray(rec?.recommended_certifications),
     roadmap: [
       { period: '30 days', items: ['Document the strongest career-relevant accomplishments and update the resume evidence.', 'Review current job requirements and compare them with the saved evidence.'] },
@@ -168,7 +174,7 @@ const genericGuidance = (rec) => {
 
 const guidanceFor = (rec) => {
   const key = normalize(rec?.path || rec?.career_title);
-  if (mechanicalGuidance[key]) return mechanicalGuidance[key];
+  if (careerGuidance[key]) return careerGuidance[key];
   if (key === 'engineering project manager' && matchPercent(rec) >= 75 && safeArray(rec?.missing_skills).length <= 1) return epmStrongGuidance;
   return genericGuidance(rec);
 };
@@ -214,9 +220,7 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
         if (saved.length) { if (!cancelled) setRecommendations(saved); return; }
         const evidence = safeArray(skills?.extracted_skills);
         if (!evidence.length) { if (!cancelled) setRecommendations([]); return; }
-        const response = await fetch(`${apiBase()}/api/recommendations`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ extracted_skills: evidence })
-        });
+        const response = await fetch(`${apiBase()}/api/recommendations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ extracted_skills: evidence }) });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.detail || `Career recommendation request failed (${response.status})`);
         if (!cancelled) setRecommendations(safeArray(body.recommendations));
