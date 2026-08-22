@@ -25,25 +25,36 @@ class RecommendationEngineTests(unittest.TestCase):
         self.assertEqual(matched, ["Power BI"])
         self.assertEqual(missing, [])
 
-    def test_confidence_affects_score(self):
+    def test_core_match_ratio_is_independent_of_confidence(self):
         high, _, _ = calculate_match_score([self.skill("Python", 1.0)], ["Python"])
         low, _, _ = calculate_match_score([self.skill("Python", 0.2)], ["Python"])
-        self.assertGreater(high, low)
-        self.assertGreaterEqual(low, 0.65)
+        self.assertEqual(high, 1.0)
+        self.assertEqual(low, 1.0)
 
     def test_recommendations_include_explainability_fields(self):
+        evidence = {
+            "education": [
+                {"program_or_degree": "Certificate in Data Analytics", "field_of_study": "Data Analytics"}
+            ],
+            "projects": [
+                {"title": "Data Analytics Project", "description": "Built Power BI dashboards using SQL and Python for data analysis."}
+            ],
+        }
         recs = get_career_recommendations([
             self.skill("Python"),
             self.skill("SQL"),
             self.skill("Power BI"),
+            self.skill("Tableau"),
             self.skill("Data Analytics"),
-        ])
+            self.skill("Advanced Excel"),
+        ], structured_evidence=evidence)
         self.assertTrue(recs)
         top = recs[0]
         self.assertIn("match_reason", top)
         self.assertIn("match_percentage", top)
         self.assertIn("skill_gap_percentage", top)
         self.assertIn("matched_skill_details", top)
+        self.assertIn("domain_evidence", top)
 
     def test_skill_gap_returns_percentages(self):
         analysis = get_skill_gap_analysis(
