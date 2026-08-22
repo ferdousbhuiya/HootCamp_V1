@@ -6,7 +6,7 @@ import AcademicPathwaysV4 from './AcademicPathwaysV4';
 
 const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
 const safe = (value) => Array.isArray(value) ? value : [];
-const norm = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+const norm = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const degreePattern = /\b(ph\.?d|doctor|master|m\.?s\.?|m\.?sc|mba|bachelor|b\.?s\.?|b\.?sc|associate|a\.?s\.?)\b/i;
 
 const StudentCareerDashboardV4 = (props) => {
@@ -55,10 +55,20 @@ const StudentCareerDashboardV4 = (props) => {
 
   const latestResume = data.resumes[0] || null;
   const resumePayload = latestResume?.raw_analysis || latestResume || {};
-  const resumeEducation = safe(resumePayload.education);
+  const resumeEducation = safe(resumePayload.education || resumePayload.structured_evidence?.education);
   const resumeCourses = safe(resumePayload.courses_from_resume || resumePayload.structured_evidence?.courses);
   const resumeFormal = resumeEducation.filter((item) => degreePattern.test(`${item?.program_or_degree || ''} ${item?.field_of_study || ''}`));
-  const resumeTraining = [...resumeEducation.filter((item) => !resumeFormal.includes(item)), ...resumeCourses];
+  const formalInstitutions = new Set(resumeFormal.map((item) => norm(item?.institution)).filter(Boolean));
+  const resumeAcademicSubjects = resumeCourses.filter((item) => {
+    const provider = norm(item?.institution_or_provider || item?.institution);
+    return item?.course_type === 'academic_subject' || item?.type === 'academic_subject' || (provider && formalInstitutions.has(provider));
+  });
+  const academicKeys = new Set(resumeAcademicSubjects.map((item) => norm(item?.name || item?.program_or_degree)).filter(Boolean));
+  const resumeTraining = [...resumeEducation.filter((item) => !resumeFormal.includes(item)), ...resumeCourses].filter((item, index, all) => {
+    const key = norm(item?.name || item?.program_or_degree);
+    if (!key || academicKeys.has(key)) return false;
+    return all.findIndex((other) => norm(other?.name || other?.program_or_degree) === key) === index;
+  });
 
   const mergedCompletedEducation = [];
   const educationSeen = new Set();
@@ -82,26 +92,27 @@ const StudentCareerDashboardV4 = (props) => {
     mergedTraining.push(item);
   });
 
+  const completedSubjects = data.subjects.filter((item) => String(item.status || 'completed').toLowerCase() === 'completed');
+  const ongoing = data.courses.filter((item) => ['in_progress', 'active'].includes(String(item.status || '').toLowerCase()));
+  const totalAcademicSubjects = completedSubjects.length + resumeAcademicSubjects.length;
+
   const hasEvidence = Boolean(
-    data.academic || mergedCompletedEducation.length || mergedTraining.length || data.subjects.length ||
+    data.academic || mergedCompletedEducation.length || mergedTraining.length || totalAcademicSubjects ||
     data.resumes.length || data.skills.length || data.certs.length || data.courses.length || data.goal
   );
   if (!hasEvidence) return <StudentCareerDashboardV3 {...props} />;
 
-  const completedSubjects = data.subjects.filter((item) => String(item.status || 'completed').toLowerCase() === 'completed');
-  const ongoing = data.courses.filter((item) => ['in_progress', 'active'].includes(String(item.status || '').toLowerCase()));
-
   const cards = [
-    ['Resume', data.resumes.length, latestResume?.filename || 'No resume saved'],
-    ['Completed education', mergedCompletedEducation.length, mergedCompletedEducation[0]?.program_name || mergedCompletedEducation[0]?.program_or_degree || mergedCompletedEducation[0]?.field_of_study || 'None saved'],
-    ['Completed training', mergedTraining.length, mergedTraining.slice(0, 2).map((item) => item.name || item.program_or_degree).join(', ') || 'None saved'],
-    ['Current education', data.academic ? 1 : 0, data.academic?.program_name || data.academic?.field_of_study || 'None saved'],
-    ['Completed subjects', completedSubjects.length, completedSubjects.slice(0, 3).map((item) => item.subject_name).join(', ') || 'None saved'],
-    ['Ongoing learning', ongoing.length, ongoing.slice(0, 3).map((item) => item.course_name).join(', ') || 'None saved'],
-    ['Certificates', data.certs.length, data.certs.slice(0, 2).map((item) => item.certification_name).join(', ') || 'None saved'],
-    ['Tracked skills', data.skills.length, data.skills.slice(0, 4).map((item) => item.skill_name).join(', ') || 'None saved'],
-    ['Career target', data.goal ? 1 : 0, data.goal?.career_title || 'Not selected']
-  ];
+    ['Resume', data.resumes.length, latestResume?.filename || 'Resume saved'],
+    ['Completed education', mergedCompletedEducation.length, mergedCompletedEducation[0]?.program_name || mergedCompletedEducation[0]?.program_or_degree || mergedCompletedEducation[0]?.field_of_study || 'Education saved'],
+    ['Academic subjects', totalAcademicSubjects, [...resumeAcademicSubjects, ...completedSubjects].slice(0, 3).map((item) => item?.name || item?.subject_name || item?.program_or_degree).filter(Boolean).join(', ') || 'Academic coursework saved'],
+    ['Completed training', mergedTraining.length, mergedTraining.slice(0, 2).map((item) => item.name || item.program_or_degree).join(', ') || 'Professional training saved'],
+    ['Current education', data.academic ? 1 : 0, data.academic?.program_name || data.academic?.field_of_study || 'Current education saved'],
+    ['Ongoing learning', ongoing.length, ongoing.slice(0, 3).map((item) => item.course_name).join(', ') || 'Ongoing learning saved'],
+    ['Certificates', data.certs.length, data.certs.slice(0, 2).map((item) => item.certification_name).join(', ') || 'Certificates saved'],
+    ['Tracked skills', data.skills.length, data.skills.slice(0, 4).map((item) => item.skill_name).join(', ') || 'Skills saved'],
+    ['Career target', data.goal ? 1 : 0, data.goal?.career_title || 'Career target selected']
+  ].filter(([, count]) => Number(count) > 0);
 
   return <div className="space-y-6">
     <section className="rounded-3xl border border-teal-200 bg-gradient-to-r from-teal-50 via-white to-sky-50 p-6 shadow-sm">
@@ -109,7 +120,7 @@ const StudentCareerDashboardV4 = (props) => {
         <div>
           <p className="text-xs font-black uppercase tracking-[.16em] text-teal-700">Your saved evidence</p>
           <h2 className="mt-2 text-2xl font-black text-slate-950">Everything you have added, in one place</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Resume-derived education and completed training are recognized here without requiring duplicate manual entry.</p>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Only evidence categories currently present in your saved profile are shown. Resume coursework is kept separate from professional training.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={onUpdateProfile} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white">Continue Evidence Builder</button>
