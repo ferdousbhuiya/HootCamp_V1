@@ -1,21 +1,22 @@
-"""Skills Pathfinder career recommendation engine.
+"""Skills Pathfinder resume-evidence career recommendation engine.
 
-Career readiness is based on direct required-skill evidence plus conservative,
-controlled domain evidence. Extraction confidence and career readiness remain
-separate concepts.
+Career readiness uses skill evidence plus relevant education, employment duration,
+project accomplishments and publications. Generic transferable skills cannot by
+themselves create an unrelated career recommendation.
 """
 import re
-from typing import Any, Dict, Iterable
+from datetime import date
+from typing import Any, Dict, Iterable, List
 
 CAREER_PATHS = [
- {"id":"electrical_engineer","path":"Electrical Engineer","category":"Engineering","required_skills":["Power Distribution","Overhead Lines","HSE Compliance","Project Management","AutoCAD","Troubleshooting"],"job_outlook":"7% growth (2022-2032)","median_salary":"$104,630","top_locations":["Texas","California","Florida","New York"]},
- {"id":"data_analyst","path":"Data Analyst","category":"Data & Analytics","required_skills":["Python","SQL","Power BI","Tableau","Data Analytics","Advanced Excel"],"job_outlook":"23% growth (2022-2032)","median_salary":"$93,750","top_locations":["California","New York","Texas","Washington"]},
- {"id":"electrical_engineering_manager","path":"Electrical Engineering Manager","category":"Engineering Management","required_skills":["Project Management","Team Leadership","Budget Management","HSE Compliance","Power Distribution","Stakeholder Collaboration"],"job_outlook":"4% growth (2022-2032)","median_salary":"$156,350","top_locations":[]},
- {"id":"power_systems_engineer","path":"Power Systems Engineer","category":"Specialized Engineering","required_skills":["Power Distribution","MV Electrical Power Distribution","Overhead Lines","Underground Cabling","AutoCAD","GIS"],"job_outlook":"9% growth (2022-2032)","median_salary":"$115,000","top_locations":[]},
- {"id":"renewable_energy_engineer","path":"Renewable Energy Engineer","category":"Green Energy","required_skills":["Solar Power System Installation","Power Distribution","Project Management","HSE Compliance","AutoCAD"],"job_outlook":"15% growth (2022-2032)","median_salary":"$102,000","top_locations":[]},
- {"id":"software_tester","path":"Software Test Engineer","category":"Software & IT","required_skills":["Selenium","Java","SQL","Software Testing","Automation"],"job_outlook":"25% growth (2022-2032)","median_salary":"$99,000","top_locations":[]},
- {"id":"project_manager_engineering","path":"Engineering Project Manager","category":"Project Management","required_skills":["Project Management","Stakeholder Collaboration","Budget Management","HSE Compliance","Team Leadership","Risk Management"],"job_outlook":"6% growth (2022-2032)","median_salary":"$135,000","top_locations":[]},
- {"id":"controls_engineer","path":"Controls/Automation Engineer","category":"Automation & Control","required_skills":["Troubleshooting","Electrical Systems","Mechanical Systems","AutoCAD","Python","Project Management"],"job_outlook":"8% growth (2022-2032)","median_salary":"$108,000","top_locations":[]},
+ {"id":"electrical_engineer","path":"Electrical Engineer","category":"Engineering","required_skills":["Power Distribution","Overhead Lines","HSE Compliance","Project Management","AutoCAD","Troubleshooting"],"domain_terms":["electrical engineering","electrical engineer","power distribution","electrical power","overhead line","underground cabl"],"job_outlook":"7% growth (2022-2032)","median_salary":"$104,630","top_locations":["Texas","California","Florida","New York"]},
+ {"id":"data_analyst","path":"Data Analyst","category":"Data & Analytics","required_skills":["Python","SQL","Power BI","Tableau","Data Analytics","Advanced Excel"],"domain_terms":["data analytics","data analyst","python","power bi","tableau"],"job_outlook":"23% growth (2022-2032)","median_salary":"$93,750","top_locations":["California","New York","Texas","Washington"]},
+ {"id":"electrical_engineering_manager","path":"Electrical Engineering Manager","category":"Engineering Management","required_skills":["Project Management","Team Leadership","Budget Management","HSE Compliance","Power Distribution","Stakeholder Collaboration"],"domain_terms":["electrical engineering","electrical engineer","power distribution","project management"],"job_outlook":"4% growth (2022-2032)","median_salary":"$156,350","top_locations":[]},
+ {"id":"power_systems_engineer","path":"Power Systems Engineer","category":"Specialized Engineering","required_skills":["Power Distribution","MV Electrical Power Distribution","Overhead Lines","Underground Cabling","AutoCAD","GIS"],"domain_terms":["power system","power distribution","electrical engineering","overhead line","underground cabl","11 kv","33/11"],"job_outlook":"9% growth (2022-2032)","median_salary":"$115,000","top_locations":[]},
+ {"id":"renewable_energy_engineer","path":"Renewable Energy Engineer","category":"Green Energy","required_skills":["Solar Power System Installation","Power Distribution","Project Management","HSE Compliance","AutoCAD"],"domain_terms":["solar power","renewable energy"],"job_outlook":"15% growth (2022-2032)","median_salary":"$102,000","top_locations":[]},
+ {"id":"software_tester","path":"Software Test Engineer","category":"Software & IT","required_skills":["Selenium","Java","SQL","Software Testing","Automation"],"domain_terms":["software testing","selenium","test automation"],"job_outlook":"25% growth (2022-2032)","median_salary":"$99,000","top_locations":[]},
+ {"id":"project_manager_engineering","path":"Engineering Project Manager","category":"Project Management","required_skills":["Project Management","Stakeholder Collaboration","Budget Management","HSE Compliance","Team Leadership","Risk Management"],"domain_terms":["engineering","project management","project coordination","electrical engineer"],"job_outlook":"6% growth (2022-2032)","median_salary":"$135,000","top_locations":[]},
+ {"id":"controls_engineer","path":"Controls/Automation Engineer","category":"Automation & Control","required_skills":["Troubleshooting","Electrical Systems","Mechanical Systems","AutoCAD","Python","Project Management"],"domain_terms":["automation","controls","electrical engineering"],"job_outlook":"8% growth (2022-2032)","median_salary":"$108,000","top_locations":[]},
 ]
 
 SKILL_ALIASES={
@@ -23,8 +24,7 @@ SKILL_ALIASES={
  "powerbi":"power bi","ms power bi":"power bi","microsoft power bi":"power bi",
  "postgres":"postgresql","postgres sql":"postgresql","mssql":"sql server","microsoft sql server":"sql server",
  "js":"javascript","nodejs":"node.js","node js":"node.js","scikit learn":"scikit-learn","sklearn":"scikit-learn",
- "google cloud platform":"gcp","microsoft azure":"azure","project management professional":"project management",
- "engineering project management":"project management","project coordination":"project management",
+ "project management professional":"project management","engineering project management":"project management","project coordination":"project management",
  "health safety environment":"hse compliance","health safety and environment":"hse compliance","hse":"hse compliance",
  "medium voltage electrical power distribution":"mv electrical power distribution","medium voltage power distribution":"mv electrical power distribution",
  "mv power distribution":"mv electrical power distribution","power systems":"power system","electrical power systems":"power system",
@@ -63,7 +63,7 @@ def _match_required_skill(required_skill,skill_index):
  hierarchy={
   'electrical systems':{'electrical systems','electrical engineering','electrical power','power system'},
   'power distribution':{'power distribution','mv electrical power distribution','power system'},
-  'mv electrical power distribution':{'mv electrical power distribution','power distribution'},
+  'mv electrical power distribution':{'mv electrical power distribution','power distribution','power system'},
   'solar power system installation':{'solar power system installation','solar power','solar power systems'},
   'team leadership':{'team leadership'},'stakeholder collaboration':{'stakeholder collaboration'},
   'software testing':{'software testing','quality assurance','qa testing'},
@@ -74,26 +74,41 @@ def _match_required_skill(required_skill,skill_index):
   if candidate in skill_index:return skill_index[candidate]
  return None
 
-DOMAIN_EVIDENCE={
- 'registered_nurse':{'nursing':.14,'healthcare':.08,'health sciences':.08,'anatomy':.06,'physiology':.06,'biology':.04},
- 'data_scientist':{'data science':.14,'data analytics':.08,'statistics':.08,'computer science':.05,'mathematics':.05},
- 'data_analyst':{'data analytics':.12,'statistics':.07,'business analytics':.06},
- 'software_developer':{'computer science':.10,'software engineering':.12,'programming':.10},
- 'civil_engineer':{'civil engineering':.14,'engineering':.06,'physics':.04},
- 'electrical_engineer':{'electrical engineering':.14,'engineering':.05,'electrical systems':.08,'power system':.06},
- 'electrical_engineering_manager':{'electrical engineering':.10,'engineering':.04},
- 'power_systems_engineer':{'electrical engineering':.08,'power system':.10},
- 'project_manager_engineering':{'electrical engineering':.04,'engineering':.04}
-}
+def _record_text(item:Dict[str,Any])->str:
+ values=[]
+ for key in ('role','employer','program_or_degree','field_of_study','institution','name','description','title','citation','evidence'):
+  v=item.get(key)
+  if v:values.append(str(v))
+ for key in ('responsibilities','skills_demonstrated'):
+  v=item.get(key)
+  if isinstance(v,list):values.extend(str(x) for x in v)
+ return _normalize_text(' '.join(values))
 
-def _domain_relevance(career,skill_index,already_matched):
- mapping=DOMAIN_EVIDENCE.get(career.get('id'),{}); contributions=[]; total=0.; matched_keys={_normalize_text(x) for x in already_matched}
- for evidence_name,weight in mapping.items():
-  k=_normalize_text(evidence_name); evidence=skill_index.get(k)
-  if not evidence or k in matched_keys:continue
-  credit=weight*(.65+.35*evidence['confidence']); total+=credit
-  contributions.append({'evidence_skill':evidence['name'],'confidence':round(evidence['confidence'],3),'readiness_credit':round(credit,4),'type':'domain_relevance'})
- return min(.20,total),contributions
+def _contains_domain(text:str,terms:List[str])->bool:
+ raw=_normalize_text(text)
+ return any(_normalize_text(term) in raw for term in terms if term)
+
+def _parse_date(value:Any):
+ s=str(value or '').strip().lower()
+ if not s:return None
+ if s in {'present','current','now'}:return date.today()
+ months={'jan':1,'january':1,'feb':2,'february':2,'mar':3,'march':3,'apr':4,'april':4,'may':5,'jun':6,'june':6,'jul':7,'july':7,'aug':8,'august':8,'sep':9,'sept':9,'september':9,'oct':10,'october':10,'nov':11,'november':11,'dec':12,'december':12}
+ m=re.search(r'([a-z]{3,9})\s+(19\d{2}|20\d{2})',s)
+ if m and m.group(1) in months:return date(int(m.group(2)),months[m.group(1)],1)
+ y=re.search(r'(19\d{2}|20\d{2})',s)
+ return date(int(y.group(1)),1,1) if y else None
+
+def _relevant_experience_years(experience,terms):
+ months=set()
+ for item in experience or []:
+  if not isinstance(item,dict) or not _contains_domain(_record_text(item),terms):continue
+  start=_parse_date(item.get('start_date')); end=_parse_date(item.get('end_date')) or date.today()
+  if not start or end<start:continue
+  y,m=start.year,start.month
+  while (y,m)<=(end.year,end.month):
+   months.add((y,m)); m+=1
+   if m==13:y+=1;m=1
+ return round(len(months)/12.,1)
 
 def calculate_match_score(extracted_skills,required_skills,skill_weights=None):
  if not required_skills:return 0.,[],[]
@@ -106,34 +121,56 @@ def calculate_match_score(extracted_skills,required_skills,skill_weights=None):
   else:missing.append(required)
  return round(earned/total,4),matched,missing
 
-def _score_career(extracted_skills,career):
- index=_build_skill_index(extracted_skills); required=career.get('required_skills') or []; matched=[]; missing=[]; details=[]; earned=total=0.
+def _score_career(extracted_skills,career,structured_evidence=None):
+ evidence=structured_evidence or {}; index=_build_skill_index(extracted_skills); required=career.get('required_skills') or []
+ matched=[]; missing=[]; details=[]; earned=total=0.
  for req in required:
   w=_required_skill_weight(career,req); total+=w; e=_match_required_skill(req,index)
   if e:
    matched.append(req); factor=.65+.35*e['confidence']; earned+=w*factor
    details.append({'required_skill':req,'evidence_skill':e['name'],'confidence':round(e['confidence'],3),'source':e['source'],'weight':round(w,3),'type':'core_competency'})
   else:missing.append(req)
- core=(earned/total) if total else 0.; domain_credit,domain_details=_domain_relevance(career,index,matched)
- score=round(min(1.,core+domain_credit),4); pct=round(score*100,1)
- if matched:reason=f"Demonstrates {len(matched)} of {len(required)} mapped core competencies."
- elif domain_details:reason=f"Relevant {', '.join(d['evidence_skill'] for d in domain_details[:3])} evidence supports this pathway, but core occupational competencies still need to be demonstrated."
- else:reason='No mapped core or domain-relevant evidence has been demonstrated yet.'
- return {'match_score':score,'match_percentage':pct,'skill_gap_percentage':round((1-score)*100,1),'matched_skills':matched,'missing_skills':missing,'matched_skill_details':details,'domain_evidence':domain_details,'domain_relevance_percentage':round(domain_credit*100,1),'match_reason':reason}
+ core=(earned/total) if total else 0.
+ terms=career.get('domain_terms') or []
+ education=safe_list(evidence.get('education')); experience=safe_list(evidence.get('experience')); projects=safe_list(evidence.get('projects') or evidence.get('project_accomplishments')); publications=safe_list(evidence.get('publications'))
+ education_hits=[x for x in education if _contains_domain(_record_text(x),terms)]
+ project_hits=[x for x in projects if _contains_domain(_record_text(x),terms)]
+ publication_hits=[x for x in publications if _contains_domain(_record_text(x),terms)]
+ years=_relevant_experience_years(experience,terms)
+ # Structured evidence contributes up to 35 percentage points, but only when career-domain evidence exists.
+ education_credit=.10 if education_hits else 0.
+ experience_credit=min(.15,years/10.*.15) if years else 0.
+ project_credit=min(.06,len(project_hits)*.02)
+ publication_credit=min(.04,len(publication_hits)*.04)
+ structured_credit=education_credit+experience_credit+project_credit+publication_credit
+ has_domain=bool(education_hits or years or project_hits or publication_hits)
+ # Generic skill overlap cannot create an unrelated career path. Require either domain evidence or >=50% core competency coverage.
+ coverage=(len(matched)/len(required)) if required else 0.
+ eligible=has_domain or coverage>=.50
+ score=round(min(1.,core*.70+structured_credit),4) if eligible else 0.
+ pct=round(score*100,1)
+ if matched:reason=f"Demonstrates {len(matched)} of {len(required)} mapped core competencies"
+ else:reason='No mapped core competencies have been demonstrated yet'
+ if years:reason+=f" with {years:g} years of career-relevant experience."
+ elif education_hits:reason+=' with relevant education evidence.'
+ else:reason+='.'
+ return {'match_score':score,'match_percentage':pct,'skill_gap_percentage':round((1-score)*100,1),'matched_skills':matched,'missing_skills':missing,'matched_skill_details':details,'domain_evidence':{'education_records':len(education_hits),'relevant_experience_years':years,'project_records':len(project_hits),'publication_records':len(publication_hits),'structured_credit':round(structured_credit,3)},'domain_relevance_percentage':round(structured_credit*100,1),'match_reason':reason,'career_relevant_experience_years':years}
+
+def safe_list(value):return value if isinstance(value,list) else []
 
 def _career_result(career,scoring):
  return {'id':career['id'],'path':career['path'],'category':career['category'],**scoring,'job_outlook':career.get('job_outlook'),'median_salary':career.get('median_salary'),'top_locations':career.get('top_locations') or [],'recommended_certifications':career.get('recommended_certifications') or [],'recommended_degrees':career.get('recommended_degrees') or [],'next_steps':career.get('next_steps') or [],'learning_resources':career.get('learning_resources') or []}
 
-def get_career_recommendations(extracted_skills,top_n=5):
+def get_career_recommendations(extracted_skills,top_n=5,structured_evidence=None):
  out=[]
  for career in CAREER_PATHS:
-  scoring=_score_career(extracted_skills,career)
+  scoring=_score_career(extracted_skills,career,structured_evidence)
   if scoring['match_score']>=.30:out.append(_career_result(career,scoring))
- out.sort(key=lambda x:(x['match_score'],len(x['matched_skills'])),reverse=True)
+ out.sort(key=lambda x:(x['match_score'],x.get('career_relevant_experience_years',0),len(x['matched_skills'])),reverse=True)
  return out[:max(1,int(top_n or 5))]
 
-def get_skill_gap_analysis(extracted_skills,target_career_id):
+def get_skill_gap_analysis(extracted_skills,target_career_id,structured_evidence=None):
  target=next((c for c in CAREER_PATHS if c['id']==target_career_id),None)
  if not target:return None
- scoring=_score_career(extracted_skills,target); missing=scoring['missing_skills']
+ scoring=_score_career(extracted_skills,target,structured_evidence); missing=scoring['missing_skills']
  return {'career_id':target['id'],'career':target['path'],**scoring,'priority_missing_skills':missing[:3],'recommended_certifications':target.get('recommended_certifications') or [],'recommended_degrees':target.get('recommended_degrees') or [],'next_steps':target.get('next_steps') or [],'learning_resources':target.get('learning_resources') or []}
