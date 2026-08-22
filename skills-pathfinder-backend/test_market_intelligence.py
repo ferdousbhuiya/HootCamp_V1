@@ -7,10 +7,10 @@ class MarketIntelligenceTests(unittest.TestCase):
     def test_parse_bls_oews_table(self):
         sample = """
         <pre>
-          Data scientists...................................................................     262,440    60.96    126,800       57.80
-          Electrical engineers.............................................................     198,750    60.15    125,100       58.00
-          Registered nurses.................................................................   3,379,720    48.76    101,420       46.90
-          Industrial engineers..............................................................    351,520    51.20    106,500       49.90
+          Data scientists...................................................................     262,440    $60.96    $126,800       $57.80
+          Electrical engineers.............................................................     198,750    $60.15    $125,100       $58.00
+          Registered nurses.................................................................   3,379,720    $48.76    $101,420       $46.90
+          Industrial engineers..............................................................    351,520    $51.20    $106,500       $49.90
         </pre>
         """
         records = parse_bls_oews_table(sample)
@@ -18,6 +18,15 @@ class MarketIntelligenceTests(unittest.TestCase):
         self.assertEqual(records["electrical engineers"]["employment"], 198750)
         self.assertEqual(records["registered nurses"]["median_hourly_wage"], 46.90)
         self.assertEqual(records["industrial engineers"]["employment"], 351520)
+
+    def test_parser_keeps_backward_compatibility_without_currency_symbols(self):
+        sample = """
+        <pre>
+          Industrial engineers..............................................................    351,520    51.20    106,500       49.90
+        </pre>
+        """
+        records = parse_bls_oews_table(sample)
+        self.assertEqual(records["industrial engineers"]["mean_annual_wage"], 106500)
 
     def test_key_student_paths_have_explicit_bls_mappings(self):
         expected = {
