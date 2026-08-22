@@ -1,12 +1,8 @@
 """Authoritative, no-paid-key market intelligence for Skills Pathfinder.
 
-The module intentionally keeps market lookup separate from resume processing.
-If BLS or O*NET is unavailable, recommendation generation still succeeds and the
-frontend can show the static catalog reference values.
-
-Sources:
-- U.S. Bureau of Labor Statistics (BLS) OEWS May 2025 national wage table.
-- O*NET 30.3 occupation data from the U.S. Department of Labor.
+Market lookup is intentionally separate from resume processing. If BLS or O*NET
+is unavailable, recommendation generation still succeeds and the frontend can
+fall back to catalog reference values.
 """
 
 from __future__ import annotations
@@ -21,11 +17,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, Optional
 from urllib.request import Request, urlopen
 
-
-BLS_OEWS_URL = os.getenv(
-    "BLS_OEWS_URL",
-    "https://www.bls.gov/news.release/ocwage.t01.htm",
-)
+BLS_OEWS_URL = os.getenv("BLS_OEWS_URL", "https://www.bls.gov/news.release/ocwage.t01.htm")
 BLS_OEWS_PERIOD = "May 2025"
 BLS_SOURCE_NAME = "U.S. Bureau of Labor Statistics Occupational Employment and Wage Statistics"
 
@@ -45,15 +37,11 @@ _cache_lock = threading.Lock()
 
 
 def _normalize(value: str) -> str:
-    value = html.unescape(str(value or "")).lower()
-    value = value.replace("&", " and ")
+    value = html.unescape(str(value or "")).lower().replace("&", " and ")
     value = re.sub(r"[^a-z0-9+.# ]+", " ", value)
     return re.sub(r"\s+", " ", value).strip()
 
 
-# The BLS table uses standard SOC occupation titles while the application uses
-# student-friendly career names. Explicit mapping is safer than arbitrary fuzzy
-# matching for wages because an incorrect salary is worse than no salary.
 CAREER_TO_BLS_TITLE = {
     "electrical engineer": "Electrical engineers",
     "electrical engineering manager": "Architectural and engineering managers",
@@ -103,8 +91,6 @@ CAREER_TO_BLS_TITLE = {
     "project manager": "Project management specialists",
 }
 
-# O*NET is more granular than OEWS, so some titles can map directly to the
-# student-facing path while others use a close official occupation title.
 CAREER_TO_ONET_TITLE = {
     "healthcare administrator": "Medical and Health Services Managers",
     "clinical research coordinator": "Clinical Research Coordinators",
@@ -156,11 +142,10 @@ def _cached(key: str, loader):
 
 
 def parse_bls_oews_table(raw_html: str) -> Dict[str, Dict[str, Any]]:
-    """Parse BLS OEWS Table 1 into a normalized-title lookup.
+    """Parse BLS OEWS Table 1 into a normalized occupation-title lookup.
 
-    Table columns are: employment, mean hourly wage, mean annual wage, and
-    median hourly wage. The parser deliberately requires all numeric columns so
-    headings and aggregate prose cannot be mistaken for occupation records.
+    Current BLS rows use currency symbols, e.g. ``$33.54 $69,770 $24.51``.
+    Older fixtures did not include those symbols, so the parser accepts both.
     """
     text = html.unescape(raw_html or "")
     text = re.sub(r"<script\b[^>]*>.*?</script>", " ", text, flags=re.I | re.S)
@@ -171,9 +156,9 @@ def parse_bls_oews_table(raw_html: str) -> Dict[str, Dict[str, Any]]:
     row_pattern = re.compile(
         r"^\s*(?P<title>[A-Za-z][A-Za-z0-9 ,/&'()\-–—]+?)\.{3,}\s*"
         r"(?P<employment>[\d,]+)\s+"
-        r"(?P<mean_hourly>\d+(?:\.\d+)?)\s+"
-        r"(?P<mean_annual>[\d,]+)\s+"
-        r"(?P<median_hourly>\d+(?:\.\d+)?)\s*$"
+        r"\$?(?P<mean_hourly>\d+(?:\.\d+)?)\s+"
+        r"\$?(?P<mean_annual>[\d,]+)\s+"
+        r"\$?(?P<median_hourly>\d+(?:\.\d+)?)\s*$"
     )
 
     for line in text.splitlines():
@@ -204,8 +189,7 @@ def _onet_rows():
 
 
 def _mapped_title(career_title: str, mapping: Dict[str, str]) -> Optional[str]:
-    normalized = _normalize(career_title)
-    return mapping.get(normalized)
+    return mapping.get(_normalize(career_title))
 
 
 def lookup_bls_market(career_title: str) -> Dict[str, Any]:
@@ -284,7 +268,6 @@ def lookup_onet_occupation(career_title: str) -> Dict[str, Any]:
 
 
 def get_market_intelligence(career_title: str) -> Dict[str, Any]:
-    """Return independent BLS and O*NET evidence without making either mandatory."""
     result: Dict[str, Any] = {
         "career_title": career_title,
         "retrieved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
