@@ -10,23 +10,35 @@ class MarketIntelligenceTests(unittest.TestCase):
           Data scientists...................................................................     262,440    $60.96    $126,800       $57.80
           Electrical engineers.............................................................     198,750    $60.15    $125,100       $58.00
           Registered nurses.................................................................   3,379,720    $48.76    $101,420       $46.90
-          Industrial engineers..............................................................    351,520    $51.20    $106,500       $49.90
+          Industrial engineers..............................................................    365,740    $52.84    $109,900       $49.25
         </pre>
         """
         records = parse_bls_oews_table(sample)
         self.assertEqual(records["data scientists"]["mean_annual_wage"], 126800)
         self.assertEqual(records["electrical engineers"]["employment"], 198750)
         self.assertEqual(records["registered nurses"]["median_hourly_wage"], 46.90)
-        self.assertEqual(records["industrial engineers"]["employment"], 351520)
+        self.assertEqual(records["industrial engineers"]["employment"], 365740)
+        self.assertEqual(records["industrial engineers"]["mean_annual_wage"], 109900)
 
-    def test_parser_keeps_backward_compatibility_without_currency_symbols(self):
+    def test_parser_accepts_current_bls_plain_numeric_rows(self):
         sample = """
         <pre>
-          Industrial engineers..............................................................    351,520    51.20    106,500       49.90
+          Industrial engineers.............................................................     365,740    52.84    109,900       49.25
+          Mechanical engineers..............................................................     296,810    54.62    113,610       50.05
         </pre>
         """
         records = parse_bls_oews_table(sample)
-        self.assertEqual(records["industrial engineers"]["mean_annual_wage"], 106500)
+        self.assertEqual(records["industrial engineers"]["mean_annual_wage"], 109900)
+        self.assertEqual(records["mechanical engineers"]["employment"], 296810)
+
+    def test_parser_preserves_row_boundaries_when_markup_changes(self):
+        sample = """
+        <div>Industrial engineers............................................................. 365,740 52.84 109,900 49.25</div>
+        <div>Mechanical engineers.............................................................. 296,810 54.62 113,610 50.05</div>
+        """
+        records = parse_bls_oews_table(sample)
+        self.assertEqual(records["industrial engineers"]["employment"], 365740)
+        self.assertEqual(records["mechanical engineers"]["mean_annual_wage"], 113610)
 
     def test_key_student_paths_have_explicit_bls_mappings(self):
         expected = {
