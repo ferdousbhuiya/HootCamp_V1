@@ -14,6 +14,7 @@ import recommendation_engine as recommendation_module
 from combined_resume_intelligence import install_combined_resume_intelligence
 from dynamic_career_discovery import discover_dynamic_careers, merge_recommendations
 from generic_market_resolution import install_generic_market_route
+from recommendation_cleanup import filter_existing_credentials
 from report_evidence_support import install_evidence_aware_report
 from server import resilient_llm_generate
 from skill_quality import install_main_skill_patch
@@ -45,7 +46,8 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         )
         result["career_profile"] = career_profile
         result["dynamic_career_discovery"] = bool(dynamic_results)
-        result["recommendations"] = merge_recommendations(dynamic_results, catalog_results, top_n=8)
+        merged = merge_recommendations(dynamic_results, catalog_results, top_n=8)
+        result["recommendations"] = filter_existing_credentials(structured, merged)
         if not result["recommendations"]:
             result["career_discovery_warning"] = "No evidence-supported career recommendations were produced."
     except Exception as exc:
@@ -53,7 +55,7 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         result["career_profile"] = structured.get("career_profile") or {}
         result["dynamic_career_discovery"] = False
         result["dynamic_career_discovery_error"] = str(exc)
-        result["recommendations"] = catalog_results
+        result["recommendations"] = filter_existing_credentials(structured, catalog_results)
 
     return result
 
