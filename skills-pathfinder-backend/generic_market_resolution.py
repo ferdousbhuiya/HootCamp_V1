@@ -4,12 +4,14 @@ Specialty job titles often do not exist as separate OEWS occupations. This layer
 uses O*NET to resolve a detailed occupation and then uses its base SOC for BLS/OEWS wage
 and employment data. If a specialty title is too colloquial for direct O*NET matching,
 a small Groq call supplies only an occupational-family hint; the hint is then validated
-against O*NET before any BLS figures are returned.
+against O*NET before any BLS figures are returned. A lexical O*NET fallback keeps the
+service useful even when the AI helper is rate-limited or temporarily unavailable.
 """
 from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from typing import Any, Dict, Optional
 
 from fastapi import Query
@@ -23,43 +25,73 @@ def _soc_to_bls_code(soc: Optional[str]) -> Optional[str]:
     return digits if len(digits) == 6 else None
 
 
+def _bls_html_fallback_for_code(code: str, occupation_title: str) -> Optional[Dict[str, Any]]:
+    """Use the published OEWS table when the public API is temporarily unavailable."""
+    try:
+        known_title = next((title for title, known_code in market.BLS_TITLE_TO_OCCUPATION_CODE.items() if known_code == code), None)
+        if not known_title:
+            return None
+        record = market._bls_records().get(market._normalize(known_title))
+        if not record:
+            return None
+        return {
+            "available": True,
+            **record,
+            "occupation_title": known_title,
+            "occupation_code": code,
+            "soc_code": market._soc_from_bls_code(code),
+            "mapped_occupation": known_title,
+            "mapping_method": "onet_validated_soc_family",
+            "retrieval_method": "bls_html_fallback",
+            "source": market.BLS_SOURCE_NAME,
+            "source_period": market.BLS_OEWS_PERIOD,
+            "source_url": market.BLS_OEWS_URL,
+        }
+    except Exception:
+        return None
+
+
 def _bls_from_soc(soc: str, occupation_title: str) -> Optional[Dict[str, Any]]:
     code = _soc_to_bls_code(soc)
     if not code:
         return None
     employment_id = market._bls_series_id(code, "01")
     annual_mean_id = market._bls_series_id(code, "04")
-    payload = market._post_json(market.BLS_API_URL, {"seriesid": [employment_id, annual_mean_id]})
-    if payload.get("status") != "REQUEST_SUCCEEDED":
-        return None
-    values = {}
-    for series in (payload.get("Results") or {}).get("series", []):
-        if series.get("data"):
-            values[series.get("seriesID")] = series["data"][0]
-    emp, wage = values.get(employment_id), values.get(annual_mean_id)
-    if not emp or not wage:
-        return None
     try:
-        employment = int(float(str(emp.get("value", "")).replace(",", "")))
-        annual_wage = int(float(str(wage.get("value", "")).replace(",", "")))
-    except (TypeError, ValueError):
-        return None
-    return {
-        "available": True,
-        "occupation_title": occupation_title,
-        "occupation_code": code,
-        "soc_code": market._soc_from_bls_code(code),
-        "employment": employment,
-        "mean_annual_wage": annual_wage,
-        "source_year": wage.get("year") or emp.get("year"),
-        "series_ids": {"employment": employment_id, "mean_annual_wage": annual_mean_id},
-        "mapped_occupation": occupation_title,
-        "mapping_method": "onet_validated_soc_family",
-        "retrieval_method": "bls_public_api",
-        "source": market.BLS_SOURCE_NAME,
-        "source_period": f"May {wage.get('year') or emp.get('year')}" if (wage.get("year") or emp.get("year")) else market.BLS_OEWS_PERIOD,
-        "source_url": market.BLS_API_URL,
-    }
+        payload = market._post_json(market.BLS_API_URL, {"seriesid": [employment_id, annual_mean_id]})
+        if payload.get("status") == "REQUEST_SUCCEEDED":
+            values = {}
+            for series in (payload.get("Results") or {}).get("series", []):
+                if series.get("data"):
+                    values[series.get("seriesID")] = series["data"][0]
+            emp, wage = values.get(employment_id), values.get(annual_mean_id)
+            if emp and wage:
+                try:
+                    employment = int(float(str(emp.get("value", "")).replace(",", "")))
+                    annual_wage = int(float(str(wage.get("value", "")).replace(",", "")))
+                except (TypeError, ValueError):
+                    employment = annual_wage = None
+                if employment is not None and annual_wage is not None:
+                    return {
+                        "available": True,
+                        "occupation_title": occupation_title,
+                        "occupation_code": code,
+                        "soc_code": market._soc_from_bls_code(code),
+                        "employment": employment,
+                        "mean_annual_wage": annual_wage,
+                        "source_year": wage.get("year") or emp.get("year"),
+                        "series_ids": {"employment": employment_id, "mean_annual_wage": annual_mean_id},
+                        "mapped_occupation": occupation_title,
+                        "mapping_method": "onet_validated_soc_family",
+                        "retrieval_method": "bls_public_api",
+                        "source": market.BLS_SOURCE_NAME,
+                        "source_period": f"May {wage.get('year') or emp.get('year')}" if (wage.get("year") or emp.get("year")) else market.BLS_OEWS_PERIOD,
+                        "source_url": market.BLS_API_URL,
+                    }
+    except Exception:
+        pass
+
+    return _bls_html_fallback_for_code(code, occupation_title)
 
 
 def _crosswalk_result(requested_title: str, onet: Dict[str, Any], bls: Dict[str, Any], resolution: Dict[str, Any]) -> Dict[str, Any]:
@@ -83,10 +115,7 @@ def _direct_onet_soc_resolution(career_title: str) -> Optional[Dict[str, Any]]:
         return None
     if not onet.get("available") or not onet.get("base_soc_code"):
         return None
-    try:
-        bls = _bls_from_soc(onet["base_soc_code"], onet.get("occupation_title") or career_title)
-    except Exception:
-        bls = None
+    bls = _bls_from_soc(onet["base_soc_code"], onet.get("occupation_title") or career_title)
     if not bls:
         return None
     return _crosswalk_result(career_title, onet, bls, {
@@ -95,6 +124,71 @@ def _direct_onet_soc_resolution(career_title: str) -> Optional[Dict[str, Any]]:
         "resolved_title": onet.get("occupation_title"),
         "validated_soc": onet.get("base_soc_code"),
     })
+
+
+def _stem_token(token: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "", token.lower())
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 4 and token.endswith("es"):
+        return token[:-2]
+    if len(token) > 3 and token.endswith("s"):
+        return token[:-1]
+    return token
+
+
+def _lexical_onet_family_resolution(career_title: str) -> Optional[Dict[str, Any]]:
+    """Profession-neutral fallback using O*NET titles/descriptions plus validated SOC data."""
+    try:
+        rows = market._onet_rows()
+    except Exception:
+        return None
+    requested_norm = market._normalize(career_title)
+    requested_tokens = {_stem_token(t) for t in requested_norm.split() if len(_stem_token(t)) >= 3}
+    if not requested_tokens:
+        return None
+
+    ranked = []
+    for row in rows:
+        title = str(row.get("title") or "")
+        description = str(row.get("description") or "")
+        title_norm = market._normalize(title)
+        title_tokens = {_stem_token(t) for t in title_norm.split() if len(_stem_token(t)) >= 3}
+        description_tokens = {_stem_token(t) for t in market._normalize(description).split() if len(_stem_token(t)) >= 3}
+        title_overlap = len(requested_tokens & title_tokens)
+        context_overlap = len(requested_tokens & description_tokens)
+        if title_overlap == 0 and context_overlap == 0:
+            continue
+        similarity = SequenceMatcher(None, requested_norm, title_norm).ratio()
+        score = (3.0 * title_overlap) + (0.8 * context_overlap) + similarity
+        ranked.append((score, row))
+
+    for _, row in sorted(ranked, key=lambda item: item[0], reverse=True)[:12]:
+        base_soc = market._onet_base_soc(row.get("onetsoc_code"))
+        if not base_soc:
+            continue
+        bls = _bls_from_soc(base_soc, row.get("title") or career_title)
+        if not bls:
+            continue
+        onet = {
+            "available": True,
+            "onet_soc_code": row.get("onetsoc_code"),
+            "base_soc_code": base_soc,
+            "occupation_title": row.get("title"),
+            "description": row.get("description"),
+            "match_score": None,
+            "mapping_method": "lexical_title_description_family",
+            "source": market.ONET_SOURCE_NAME,
+            "source_release": market.ONET_RELEASE,
+            "source_url": market.ONET_OCCUPATION_DATA_URL,
+        }
+        return _crosswalk_result(career_title, onet, bls, {
+            "method": "lexical_onet_family_validated_by_bls",
+            "requested_title": career_title,
+            "resolved_title": row.get("title"),
+            "validated_soc": base_soc,
+        })
+    return None
 
 
 async def _ai_family_resolution(career_title: str, resilient_llm_generate) -> Optional[Dict[str, Any]]:
@@ -116,10 +210,7 @@ JOB TITLE: {career_title}"""
         return None
     if not onet.get("available") or not onet.get("base_soc_code"):
         return None
-    try:
-        bls = _bls_from_soc(onet["base_soc_code"], onet.get("occupation_title") or hint)
-    except Exception:
-        return None
+    bls = _bls_from_soc(onet["base_soc_code"], onet.get("occupation_title") or hint)
     if not bls:
         return None
     return _crosswalk_result(career_title, onet, bls, {
@@ -133,7 +224,6 @@ JOB TITLE: {career_title}"""
 
 
 def _safe_existing_market(career_title: str) -> Dict[str, Any]:
-    """Never let the legacy/conservative lookup prevent generic resolution."""
     try:
         result = market.get_market_intelligence(career_title)
         return result if isinstance(result, dict) else {}
@@ -148,20 +238,21 @@ def _safe_existing_market(career_title: str) -> Dict[str, Any]:
 
 
 async def _generic_resolution(career_title: str, resilient_llm_generate) -> Optional[Dict[str, Any]]:
-    # Try the title itself first. This is fast for official and near-official occupation names.
     resolved = _direct_onet_soc_resolution(career_title)
     if resolved:
         return resolved
 
-    # Then resolve specialty/colloquial titles to a broad occupation family and validate it.
-    return await _ai_family_resolution(career_title, resilient_llm_generate)
+    resolved = await _ai_family_resolution(career_title, resilient_llm_generate)
+    if resolved:
+        return resolved
+
+    # AI may be rate-limited. O*NET itself can still resolve many specialty titles by
+    # title/description evidence and validate the resulting SOC before BLS data is shown.
+    return _lexical_onet_family_resolution(career_title)
 
 
 def install_generic_market_route(app, resilient_llm_generate):
     async def generic_market_data(career_title: str = Query(..., min_length=2, max_length=180)):
-        # The previous implementation called the legacy market service outside a try/except.
-        # A transient BLS/O*NET failure could therefore abort this route before the generic
-        # resolver ran. Keep the legacy result when it succeeds, but never make it a gate.
         direct = _safe_existing_market(career_title)
         if (direct.get("bls") or {}).get("available"):
             direct["title_resolution"] = {"method": "existing_confirmed_mapping", "requested_title": career_title}
@@ -170,28 +261,6 @@ def install_generic_market_route(app, resilient_llm_generate):
         resolved = await _generic_resolution(career_title, resilient_llm_generate)
         if resolved:
             return {"status": "success", "market_data": resolved}
-
-        # One more useful fallback: if the AI hint resolved to a title that the conservative
-        # service knows but live SOC retrieval was temporarily unavailable, reuse that
-        # confirmed service result rather than silently dropping all market information.
-        try:
-            prompt = f"""Map this job title or specialty to the closest broad U.S. occupation title used for official labor-market statistics.
-Return only JSON: {{"occupation_title_hint":""}}. Do not return salary or employment numbers.
-JOB TITLE: {career_title}"""
-            raw = await resilient_llm_generate(prompt, max_tokens_override=220)
-            hint = str((json.loads(raw) or {}).get("occupation_title_hint") or "").strip()
-            if hint:
-                hinted = _safe_existing_market(hint)
-                if (hinted.get("bls") or {}).get("available"):
-                    hinted["career_title"] = career_title
-                    hinted["title_resolution"] = {
-                        "method": "ai_family_hint_existing_confirmed_mapping",
-                        "requested_title": career_title,
-                        "occupation_title_hint": hint,
-                    }
-                    return {"status": "success", "market_data": hinted}
-        except Exception:
-            pass
 
         direct.setdefault("title_resolution", {"method": "unresolved", "requested_title": career_title})
         return {"status": "success", "market_data": direct}
