@@ -1,3 +1,3 @@
-import CareerReportV2 from './CareerReportV2';
+import CareerReportV3 from './CareerReportV3';
 
-export default CareerReportV2;
+export default CareerReportV3;
