@@ -59,7 +59,7 @@ Return ONLY JSON in this structure:
   }}]
 }}
 
-Extraction rules:
+Extraction and planning rules:
 - Extract ALL employment roles, employers and dates.
 - Extract ALL formal education.
 - Credentials include professional licenses, certifications and named credentials exactly
@@ -69,6 +69,17 @@ Extraction rules:
 - Education and credentials are evidence categories, not skills.
 - Candidate evidence must point to facts present in this resume.
 - Current profession must outrank unrelated pivots when substantial experience supports it.
+- Tailor 30-day, 6-month and 1-year actions to the person's demonstrated professional level.
+  Do not give an experienced professional entry-level internship, beginner portfolio or student-style
+  advice unless the candidate career is a genuine career pivot that requires it.
+- Do not recommend obtaining a credential or license that the resume already lists as held.
+  Existing credentials may be acknowledged as evidence or maintenance/renewal considerations, but
+  they are not new recommendations.
+- Advancement actions should be realistic next steps for the profession and should not assume a
+  management promotion, degree program or major career change unless the evidence supports that path.
+- For current-profession and specialization careers, prefer strengthening measurable outcomes,
+  advanced practice, leadership, quality, specialty development, continuing professional education,
+  current standards, or other profession-appropriate growth over generic project/portfolio language.
 
 RESUME:
 {text}
@@ -78,8 +89,6 @@ RESUME:
             data = json.loads(raw)
         except Exception as exc:
             print(f"[COMBINED RESUME INTELLIGENCE] AI extraction failed: {exc}")
-            # Preserve the existing resilient evidence extractor as the fallback. This may
-            # perform its own AI call, but only after the preferred single-pass call failed.
             return await original_extractor(text)
 
         for key in ("education", "experience", "projects", "publications", "certifications", "courses", "career_candidates"):
