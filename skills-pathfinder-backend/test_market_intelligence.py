@@ -1,6 +1,12 @@
 import unittest
 
-from market_intelligence import CAREER_TO_BLS_TITLE, CAREER_TO_ONET_TITLE, parse_bls_oews_table
+from market_intelligence import (
+    CAREER_TO_BLS_TITLE,
+    CAREER_TO_ONET_TITLE,
+    _build_crosswalk,
+    _soc_from_bls_code,
+    parse_bls_oews_table,
+)
 
 
 class MarketIntelligenceTests(unittest.TestCase):
@@ -42,37 +48,41 @@ class MarketIntelligenceTests(unittest.TestCase):
 
     def test_key_student_paths_have_explicit_bls_mappings(self):
         expected = {
-            "electrical engineer",
-            "registered nurse",
-            "software developer",
-            "cybersecurity analyst",
-            "data scientist",
-            "accountant",
-            "financial analyst",
-            "project manager",
-            "industrial engineer",
-            "manufacturing engineer",
-            "mechanical engineer",
-            "mechanical design engineer",
-            "hvac engineer",
-            "business process analyst",
-            "management analyst consultant",
-            "operations analyst",
+            "electrical engineer", "registered nurse", "software developer",
+            "cybersecurity analyst", "data scientist", "accountant", "financial analyst",
+            "project manager", "industrial engineer", "manufacturing engineer",
+            "mechanical engineer", "mechanical design engineer", "hvac engineer",
+            "business process analyst", "management analyst consultant", "operations analyst",
         }
         self.assertTrue(expected.issubset(set(CAREER_TO_BLS_TITLE)))
 
     def test_new_paths_have_explicit_onet_mappings(self):
         expected = {
-            "industrial engineer",
-            "manufacturing engineer",
-            "mechanical design engineer",
-            "hvac engineer",
-            "business process analyst",
-            "management analyst consultant",
-            "operations analyst",
-            "business intelligence analyst",
+            "industrial engineer", "manufacturing engineer", "mechanical design engineer",
+            "hvac engineer", "business process analyst", "management analyst consultant",
+            "operations analyst", "business intelligence analyst",
         }
         self.assertTrue(expected.issubset(set(CAREER_TO_ONET_TITLE)))
+
+    def test_bls_code_is_exposed_as_standard_soc(self):
+        self.assertEqual(_soc_from_bls_code("172112"), "17-2112")
+        self.assertEqual(_soc_from_bls_code("291141"), "29-1141")
+
+    def test_crosswalk_marks_same_soc_family_without_forcing_same_title(self):
+        bls = {"available": True, "occupation_title": "Industrial engineers", "soc_code": "17-2112"}
+        onet = {"available": True, "occupation_title": "Manufacturing Engineers", "onet_soc_code": "17-2112.03", "base_soc_code": "17-2112"}
+        result = _build_crosswalk("Manufacturing Engineer", bls, onet)
+        self.assertEqual(result["relationship"], "same_soc_family_different_detail")
+        self.assertTrue(result["same_soc_family"])
+        self.assertEqual(result["bls_occupation_title"], "Industrial engineers")
+        self.assertEqual(result["onet_occupation_title"], "Manufacturing Engineers")
+
+    def test_crosswalk_marks_matching_titles(self):
+        bls = {"available": True, "occupation_title": "Industrial engineers", "soc_code": "17-2112"}
+        onet = {"available": True, "occupation_title": "Industrial Engineers", "onet_soc_code": "17-2112.00", "base_soc_code": "17-2112"}
+        result = _build_crosswalk("Industrial Engineer", bls, onet)
+        self.assertEqual(result["relationship"], "same_occupation_title")
+        self.assertTrue(result["same_soc_family"])
 
 
 if __name__ == "__main__":
