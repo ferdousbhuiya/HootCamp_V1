@@ -157,3 +157,140 @@
 .authenticated-shell table tbody tr:hover {
   background-color: rgba(240, 253, 250, 0.7);
 }
+
+/* Persistent report action. The existing report component remains the source of truth;
+   this simply exposes the same action in the primary workspace navigation. */
+.authenticated-shell .workspace-report-button {
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  background: rgba(16, 185, 129, 0.14);
+  color: #d1fae5;
+  white-space: nowrap;
+}
+
+.authenticated-shell .workspace-report-button:hover {
+  border-color: rgba(110, 231, 183, 0.8);
+  background: #10b981;
+  color: #052e2b;
+  box-shadow: 0 8px 22px -12px rgba(16, 185, 129, 0.85);
+}
+
+.authenticated-shell .legacy-report-trigger {
+  display: none !important;
+}
+
+/* Profile & Evidence navigation. */
+.authenticated-shell .evidence-navigation {
+  overflow: hidden;
+  border-radius: 1.35rem !important;
+  border: 1px solid #dbe4ee !important;
+  background:
+    linear-gradient(145deg, rgba(240, 253, 250, 0.96), rgba(255, 255, 255, 0.98) 45%),
+    #ffffff;
+  padding: 1rem !important;
+}
+
+.authenticated-shell .evidence-navigation > h2 {
+  margin: 0 0 0.85rem !important;
+  padding: 0 0.25rem;
+  color: #0f172a;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.authenticated-shell .evidence-navigation-list {
+  display: grid;
+  gap: 0.65rem !important;
+}
+
+.authenticated-shell .evidence-navigation-item {
+  position: relative;
+  min-height: 3.4rem;
+  display: flex !important;
+  align-items: center;
+  gap: 0.8rem;
+  width: 100%;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 0.9rem !important;
+  background: rgba(255, 255, 255, 0.94) !important;
+  padding: 0.8rem 2.25rem 0.8rem 0.8rem !important;
+  color: #334155 !important;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: left;
+  box-shadow: 0 6px 18px -16px rgba(15, 23, 42, 0.65);
+}
+
+.authenticated-shell .evidence-navigation-item::before {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  place-items: center;
+  border-radius: 0.7rem;
+  background: #f1f5f9;
+  color: #0f766e;
+  font-size: 0.95rem;
+  font-weight: 900;
+}
+
+.authenticated-shell .evidence-navigation-item::after {
+  content: '›';
+  position: absolute;
+  right: 0.8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.authenticated-shell .evidence-navigation-item[data-nav-index='0']::before { content: '▤'; }
+.authenticated-shell .evidence-navigation-item[data-nav-index='1']::before { content: '◎'; }
+.authenticated-shell .evidence-navigation-item[data-nav-index='2']::before { content: '◆'; }
+.authenticated-shell .evidence-navigation-item[data-nav-index='3']::before { content: '✓'; }
+
+.authenticated-shell .evidence-navigation-item:hover {
+  border-color: #99f6e4 !important;
+  background: #f0fdfa !important;
+  color: #115e59 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px -18px rgba(13, 148, 136, 0.65);
+}
+
+.authenticated-shell .evidence-navigation-item.bg-indigo-100,
+.authenticated-shell .evidence-navigation-item[class*='bg-indigo-100'] {
+  border-color: #5eead4 !important;
+  background: linear-gradient(135deg, #ccfbf1, #f0fdfa) !important;
+  color: #115e59 !important;
+  box-shadow: inset 3px 0 0 #0f766e, 0 10px 24px -20px rgba(13, 148, 136, 0.75) !important;
+}
+
+.authenticated-shell .evidence-navigation-item.bg-indigo-100::before,
+.authenticated-shell .evidence-navigation-item[class*='bg-indigo-100']::before {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.authenticated-shell .evidence-navigation-item.bg-indigo-100::after,
+.authenticated-shell .evidence-navigation-item[class*='bg-indigo-100']::after {
+  color: #0f766e;
+}
+
+@media (max-width: 1023px) {
+  .authenticated-shell .evidence-navigation-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 639px) {
+  .authenticated-shell .evidence-navigation-list {
+    grid-template-columns: 1fr;
+  }
+
+  .authenticated-shell .workspace-report-button {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+}
