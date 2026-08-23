@@ -39,7 +39,6 @@ const installWorkspaceUiEnhancements = () => {
       formButton.id = 'mobile-auth-form-button'
       formButton.className = 'mobile-auth-secondary'
       formButton.textContent = 'Sign in'
-      formButton.addEventListener('click', scrollToAuthPanel)
 
       const modeButton = document.createElement('button')
       modeButton.type = 'button'
@@ -58,14 +57,17 @@ const installWorkspaceUiEnhancements = () => {
     const mobileModeButton = document.getElementById('mobile-auth-mode-button')
     const mobileFormButton = document.getElementById('mobile-auth-form-button')
     const sourceLabel = sourceModeButton.textContent?.trim() || 'Create account'
-    mobileModeButton.textContent = sourceLabel
-    mobileFormButton.textContent = sourceLabel === 'Create account' ? 'Sign in' : 'Create account'
-    mobileFormButton.onclick = () => {
-      if (sourceLabel === 'Create account') {
-        scrollToAuthPanel()
-      } else {
-        sourceModeButton.click()
-        window.setTimeout(scrollToAuthPanel, 30)
+    const secondaryLabel = sourceLabel === 'Create account' ? 'Sign in' : 'Create account'
+    if (mobileModeButton && mobileModeButton.textContent !== sourceLabel) mobileModeButton.textContent = sourceLabel
+    if (mobileFormButton && mobileFormButton.textContent !== secondaryLabel) mobileFormButton.textContent = secondaryLabel
+    if (mobileFormButton) {
+      mobileFormButton.onclick = () => {
+        if (sourceLabel === 'Create account') {
+          scrollToAuthPanel()
+        } else {
+          sourceModeButton.click()
+          window.setTimeout(scrollToAuthPanel, 30)
+        }
       }
     }
   }
