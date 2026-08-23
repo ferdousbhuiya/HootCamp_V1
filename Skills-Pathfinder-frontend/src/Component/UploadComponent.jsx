@@ -6,14 +6,17 @@ const emptyGuided = {
 
 const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoading }) => {
   const fileInputRef = useRef(null);
+  const progressTimerRef = useRef(null);
   const [mode, setMode] = useState('upload');
   const [error, setError] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState('');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [pastedText, setPastedText] = useState('');
   const [guided, setGuided] = useState(emptyGuided);
 
   const MAX_FILE_SIZE = 15 * 1024 * 1024;
+  const ANALYSIS_TIMEOUT_MS = 150000;
   const validTypes = ['application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','image/png','image/jpeg','image/jpg','text/plain'];
   const validExtensions = ['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.txt'];
 
@@ -22,6 +25,31 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
     if (!validTypes.includes(file.type) && !validExtensions.includes(ext)) return 'Invalid file type. Supported: PDF, DOCX, PNG, JPG, JPEG, TXT';
     if (file.size > MAX_FILE_SIZE) return `File is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`;
     return null;
+  };
+
+  const stopProgressTimer = () => {
+    if (progressTimerRef.current) {
+      clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+  };
+
+  const startProgressTimer = () => {
+    stopProgressTimer();
+    const startedAt = Date.now();
+    setElapsedSeconds(0);
+    setUploadProgress('Reading your document and extracting evidence...');
+    progressTimerRef.current = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      setElapsedSeconds(elapsed);
+      if (elapsed >= 70) {
+        setUploadProgress('Finalizing career matches. Complex resumes can take a little longer...');
+      } else if (elapsed >= 35) {
+        setUploadProgress('Building profession-specific career matches and readiness evidence...');
+      } else if (elapsed >= 12) {
+        setUploadProgress('Organizing skills, education, credentials and experience...');
+      }
+    }, 1000);
   };
 
   const processFile = async (file) => {
@@ -35,11 +63,11 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
     setError(null);
     setSelectedFile(file);
     setIsLoading(true);
-    setUploadProgress('Analyzing your evidence...');
+    startProgressTimer();
     const formData = new FormData();
     formData.append('file', file);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutId = setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
 
     try {
       const apiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -49,17 +77,21 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
         throw new Error(body.detail || `Server error: ${response.status}`);
       }
       const data = await response.json();
-      setUploadProgress('Saving skills and career findings...');
+      stopProgressTimer();
+      setUploadProgress('Saving skills, evidence and career findings...');
       await onUploadSuccess(data, file);
-      setUploadProgress('Saved successfully.');
+      setUploadProgress('Analysis saved successfully.');
       setSelectedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err) {
-      const message = err.name === 'AbortError' ? 'Analysis timed out. Please try again.' : (err.message || 'The document could not be analyzed.');
+      const message = err.name === 'AbortError'
+        ? 'Analysis is taking unusually long. Please try again. Your document was not deleted or changed.'
+        : (err.message || 'The document could not be analyzed.');
       setError(message);
       onUploadError({ message });
     } finally {
       clearTimeout(timeoutId);
+      stopProgressTimer();
       setIsLoading(false);
     }
   };
@@ -117,6 +149,7 @@ const UploadComponent = ({ onUploadSuccess, onUploadError, isLoading, setIsLoadi
           <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-white text-teal-700 shadow-sm">{isLoading ? <span className="h-7 w-7 animate-spin rounded-full border-4 border-teal-100 border-t-teal-600" /> : '↑'}</div>
           <h3 className="text-lg font-bold text-slate-900">{isLoading ? `Processing ${selectedFile?.name || 'document'}...` : 'Drop a resume or supporting profile document'}</h3>
           <p className="mt-2 text-sm text-slate-500">{isLoading ? uploadProgress : 'PDF, DOCX, PNG, JPG, JPEG or TXT, up to 15MB'}</p>
+          {isLoading && <p className="mt-2 text-xs font-semibold text-slate-400">Elapsed: {elapsedSeconds}s · Please keep this page open while the analysis finishes.</p>}
         </div>
       )}
 
