@@ -13,7 +13,7 @@ import main as main_module
 import recommendation_engine as recommendation_module
 from combined_resume_intelligence import install_combined_resume_intelligence
 from dynamic_career_discovery import discover_dynamic_careers, merge_recommendations
-from generic_market_resolution import install_generic_market_route
+from generic_market_resolution import install_generic_market_route, _generic_resolution, _safe_existing_market
 from recommendation_cleanup import filter_existing_credentials
 from report_evidence_support import install_evidence_aware_report
 from server import resilient_llm_generate
@@ -25,8 +25,40 @@ install_evidence_aware_report(app, resilient_llm_generate)
 install_generic_market_route(app, resilient_llm_generate)
 
 
+async def _embed_market_data(recommendations):
+    """Attach market data while the upload API is already known to be reachable.
+
+    Career Intelligence still refreshes market data independently, but embedding a copy
+    makes the saved analysis resilient when a separate market-data browser request is
+    blocked by proxy/DNS configuration or a transient network failure.
+    """
+    for rec in (recommendations or [])[:5]:
+        title = str(rec.get("path") or rec.get("career_title") or "").strip()
+        if not title:
+            continue
+        try:
+            direct = _safe_existing_market(title)
+            if (direct.get("bls") or {}).get("available"):
+                direct["title_resolution"] = {
+                    "method": "existing_confirmed_mapping_embedded",
+                    "requested_title": title,
+                }
+                rec["market_data"] = direct
+                continue
+
+            resolved = await _generic_resolution(title, resilient_llm_generate)
+            if resolved:
+                rec["market_data"] = resolved
+            elif direct:
+                rec["market_data"] = direct
+        except Exception as exc:
+            # Market enrichment must never break resume analysis/career discovery.
+            print(f"[MARKET EMBED] {title}: {type(exc).__name__}: {exc}")
+    return recommendations
+
+
 async def structured_resume_upload(file: UploadFile = File(...)):
-    """Extract evidence, discover careers generically, then score deterministically."""
+    """Extract evidence, discover careers generically, score and enrich deterministically."""
     result = await enhanced_upload(file)
     skills = result.get("extracted_skills") or []
     structured = result.get("structured_evidence") or {}
@@ -57,6 +89,7 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         result["dynamic_career_discovery_error"] = str(exc)
         result["recommendations"] = filter_existing_credentials(structured, catalog_results)
 
+    result["recommendations"] = await _embed_market_data(result.get("recommendations") or [])
     return result
 
 
