@@ -1,10 +1,9 @@
 """Authoritative, no-paid-key market intelligence for Skills Pathfinder.
 
-Market lookup is intentionally separate from resume processing. If BLS or O*NET
-is unavailable, recommendation generation still succeeds and the frontend can
-fall back to catalog reference values.
+BLS supplies wage/employment statistics and O*NET supplies occupational detail.
+The two sources may legitimately use different levels of occupational specificity,
+so the service returns explicit crosswalk metadata instead of silently mixing labels.
 """
-
 from __future__ import annotations
 
 import html
@@ -21,14 +20,9 @@ BLS_API_URL = os.getenv("BLS_API_URL", "https://api.bls.gov/publicAPI/v2/timeser
 BLS_OEWS_URL = os.getenv("BLS_OEWS_URL", "https://www.bls.gov/news.release/ocwage.t01.htm")
 BLS_OEWS_PERIOD = "May 2025"
 BLS_SOURCE_NAME = "U.S. Bureau of Labor Statistics Occupational Employment and Wage Statistics"
-
-ONET_OCCUPATION_DATA_URL = os.getenv(
-    "ONET_OCCUPATION_DATA_URL",
-    "https://www.onetcenter.org/dl_files/database/db_30_3_json/occupation_data.json",
-)
+ONET_OCCUPATION_DATA_URL = os.getenv("ONET_OCCUPATION_DATA_URL", "https://www.onetcenter.org/dl_files/database/db_30_3_json/occupation_data.json")
 ONET_RELEASE = "30.3"
 ONET_SOURCE_NAME = "O*NET Database, U.S. Department of Labor/ETA"
-
 CACHE_TTL_SECONDS = int(os.getenv("MARKET_CACHE_TTL_SECONDS", "43200"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("MARKET_HTTP_TIMEOUT_SECONDS", "12"))
 USER_AGENT = "Mozilla/5.0 SkillsPathfinder/1.0"
@@ -93,38 +87,21 @@ CAREER_TO_BLS_TITLE = {
 }
 
 BLS_TITLE_TO_OCCUPATION_CODE = {
-    "Electrical engineers": "172071",
-    "Architectural and engineering managers": "119041",
-    "Engineers, all other": "172199",
-    "Software quality assurance analysts and testers": "151253",
-    "Project management specialists": "131082",
-    "Operations research analysts": "152031",
-    "Registered nurses": "291141",
-    "Medical assistants": "319092",
-    "Medical and health services managers": "119111",
-    "Natural sciences managers": "119121",
-    "Health education specialists": "211091",
-    "Clinical laboratory technologists and technicians": "292010",
-    "Biological technicians": "194021",
-    "Environmental scientists and specialists, including health": "192041",
-    "Management analysts": "131111",
-    "Accountants and auditors": "132011",
-    "Financial and investment analysts": "132051",
-    "Human resources specialists": "131071",
-    "Market research analysts and marketing specialists": "131161",
-    "General and operations managers": "111021",
-    "Logisticians": "131081",
-    "Instructional coordinators": "252031",
-    "Historians": "193093",
-    "Software developers": "151252",
-    "Information security analysts": "151212",
-    "Computer network support specialists": "151232",
-    "Data scientists": "152051",
-    "Database administrators": "151241",
-    "Network and computer systems administrators": "151244",
-    "Civil engineers": "172051",
-    "Industrial engineers": "172112",
-    "Mechanical engineers": "172141",
+    "Electrical engineers": "172071", "Architectural and engineering managers": "119041",
+    "Engineers, all other": "172199", "Software quality assurance analysts and testers": "151253",
+    "Project management specialists": "131082", "Operations research analysts": "152031",
+    "Registered nurses": "291141", "Medical assistants": "319092",
+    "Medical and health services managers": "119111", "Natural sciences managers": "119121",
+    "Health education specialists": "211091", "Clinical laboratory technologists and technicians": "292010",
+    "Biological technicians": "194021", "Environmental scientists and specialists, including health": "192041",
+    "Management analysts": "131111", "Accountants and auditors": "132011",
+    "Financial and investment analysts": "132051", "Human resources specialists": "131071",
+    "Market research analysts and marketing specialists": "131161", "General and operations managers": "111021",
+    "Logisticians": "131081", "Instructional coordinators": "252031", "Historians": "193093",
+    "Software developers": "151252", "Information security analysts": "151212",
+    "Computer network support specialists": "151232", "Data scientists": "152051",
+    "Database administrators": "151241", "Network and computer systems administrators": "151244",
+    "Civil engineers": "172051", "Industrial engineers": "172112", "Mechanical engineers": "172141",
 }
 
 CAREER_TO_ONET_TITLE = {
@@ -160,24 +137,14 @@ CAREER_TO_ONET_TITLE = {
 
 
 def _fetch_text(url: str) -> str:
-    request = Request(url, headers={
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/json,text/plain,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
-    with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+    req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/json,text/plain,*/*", "Accept-Language": "en-US,en;q=0.9"})
+    with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
         return response.read().decode(response.headers.get_content_charset() or "utf-8", errors="replace")
 
 
 def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    body = json.dumps(payload).encode("utf-8")
-    request = Request(
-        url,
-        data=body,
-        method="POST",
-        headers={"User-Agent": USER_AGENT, "Content-Type": "application/json", "Accept": "application/json"},
-    )
-    with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), method="POST", headers={"User-Agent": USER_AGENT, "Content-Type": "application/json", "Accept": "application/json"})
+    with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8", errors="replace"))
 
 
@@ -199,30 +166,29 @@ def parse_bls_oews_table(raw_html: str) -> Dict[str, Dict[str, Any]]:
     text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
     text = re.sub(r"<[^>]+>", "", text)
     records: Dict[str, Dict[str, Any]] = {}
-    row_pattern = re.compile(
-        r"^\s*(?P<title>[A-Za-z][A-Za-z0-9 ,/&'()\-–—]+?)\.{3,}\s*"
-        r"(?P<employment>[\d,]+)\s+"
-        r"\$?(?P<mean_hourly>\d+(?:\.\d+)?)\s+"
-        r"\$?(?P<mean_annual>[\d,]+)\s+"
-        r"\$?(?P<median_hourly>\d+(?:\.\d+)?)\s*$"
-    )
+    row_pattern = re.compile(r"^\s*(?P<title>[A-Za-z][A-Za-z0-9 ,/&'()\-–—]+?)\.{3,}\s*(?P<employment>[\d,]+)\s+\$?(?P<mean_hourly>\d+(?:\.\d+)?)\s+\$?(?P<mean_annual>[\d,]+)\s+\$?(?P<median_hourly>\d+(?:\.\d+)?)\s*$")
     for line in text.splitlines():
         match = row_pattern.match(line)
-        if not match:
-            continue
-        title = re.sub(r"\s+", " ", match.group("title")).strip()
-        records[_normalize(title)] = {
-            "occupation_title": title,
-            "employment": int(match.group("employment").replace(",", "")),
-            "mean_hourly_wage": float(match.group("mean_hourly")),
-            "mean_annual_wage": int(match.group("mean_annual").replace(",", "")),
-            "median_hourly_wage": float(match.group("median_hourly")),
-        }
+        if match:
+            title = re.sub(r"\s+", " ", match.group("title")).strip()
+            records[_normalize(title)] = {"occupation_title": title, "employment": int(match.group("employment").replace(",", "")), "mean_hourly_wage": float(match.group("mean_hourly")), "mean_annual_wage": int(match.group("mean_annual").replace(",", "")), "median_hourly_wage": float(match.group("median_hourly"))}
     return records
 
 
 def _bls_series_id(occupation_code: str, datatype_code: str) -> str:
-    return f"OEUN0000000{'000000'}{occupation_code}{datatype_code}"
+    return f"OEUN0000000000000{occupation_code}{datatype_code}"
+
+
+def _soc_from_bls_code(code: Optional[str]) -> Optional[str]:
+    if not code or len(code) != 6 or not code.isdigit():
+        return None
+    return f"{code[:2]}-{code[2:]}"
+
+
+def _onet_base_soc(code: Optional[str]) -> Optional[str]:
+    if not code:
+        return None
+    return str(code).split(".", 1)[0]
 
 
 def _bls_api_record(mapped_title: str) -> Optional[Dict[str, Any]]:
@@ -234,31 +200,19 @@ def _bls_api_record(mapped_title: str) -> Optional[Dict[str, Any]]:
     payload = _post_json(BLS_API_URL, {"seriesid": [employment_id, annual_mean_id]})
     if payload.get("status") != "REQUEST_SUCCEEDED":
         raise RuntimeError("BLS public API request did not succeed")
-    values: Dict[str, Dict[str, Any]] = {}
+    values = {}
     for series in (payload.get("Results") or {}).get("series", []):
-        series_id = series.get("seriesID")
-        data = series.get("data") or []
-        if not data:
-            continue
-        item = data[0]
-        values[series_id] = item
-    employment_item = values.get(employment_id)
-    wage_item = values.get(annual_mean_id)
-    if not employment_item or not wage_item:
+        if series.get("data"):
+            values[series.get("seriesID")] = series["data"][0]
+    emp, wage = values.get(employment_id), values.get(annual_mean_id)
+    if not emp or not wage:
         return None
     try:
-        employment = int(float(str(employment_item.get("value", "")).replace(",", "")))
-        annual_wage = int(float(str(wage_item.get("value", "")).replace(",", "")))
+        employment = int(float(str(emp.get("value", "")).replace(",", "")))
+        annual_wage = int(float(str(wage.get("value", "")).replace(",", "")))
     except (TypeError, ValueError):
         return None
-    year = wage_item.get("year") or employment_item.get("year")
-    return {
-        "occupation_title": mapped_title,
-        "employment": employment,
-        "mean_annual_wage": annual_wage,
-        "source_year": year,
-        "series_ids": {"employment": employment_id, "mean_annual_wage": annual_mean_id},
-    }
+    return {"occupation_title": mapped_title, "occupation_code": occupation_code, "soc_code": _soc_from_bls_code(occupation_code), "employment": employment, "mean_annual_wage": annual_wage, "source_year": wage.get("year") or emp.get("year"), "series_ids": {"employment": employment_id, "mean_annual_wage": annual_mean_id}}
 
 
 def _bls_records() -> Dict[str, Dict[str, Any]]:
@@ -280,131 +234,74 @@ def _mapped_title(career_title: str, mapping: Dict[str, str]) -> Optional[str]:
 def lookup_bls_market(career_title: str) -> Dict[str, Any]:
     mapped = _mapped_title(career_title, CAREER_TO_BLS_TITLE)
     if not mapped:
-        return {
-            "available": False,
-            "reason": "No conservative BLS occupation mapping is configured for this career yet.",
-            "source": BLS_SOURCE_NAME,
-            "source_period": BLS_OEWS_PERIOD,
-            "source_url": BLS_API_URL,
-        }
-
+        return {"available": False, "reason": "No conservative BLS occupation mapping is configured for this career yet.", "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_API_URL}
     api_error = None
     try:
         record = _cached(f"bls-api:{mapped}", lambda: _bls_api_record(mapped))
         if record:
-            return {
-                "available": True,
-                **record,
-                "mapped_occupation": mapped,
-                "mapping_method": "explicit_conservative_mapping",
-                "retrieval_method": "bls_public_api",
-                "source": BLS_SOURCE_NAME,
-                "source_period": f"May {record.get('source_year')}" if record.get("source_year") else BLS_OEWS_PERIOD,
-                "source_url": BLS_API_URL,
-            }
+            return {"available": True, **record, "mapped_occupation": mapped, "mapping_method": "explicit_conservative_mapping", "retrieval_method": "bls_public_api", "source": BLS_SOURCE_NAME, "source_period": f"May {record.get('source_year')}" if record.get("source_year") else BLS_OEWS_PERIOD, "source_url": BLS_API_URL}
     except Exception as exc:
         api_error = str(exc)
-
     try:
-        records = _bls_records()
-        record = records.get(_normalize(mapped))
+        record = _bls_records().get(_normalize(mapped))
         if record:
-            return {
-                "available": True,
-                **record,
-                "mapped_occupation": mapped,
-                "mapping_method": "explicit_conservative_mapping",
-                "retrieval_method": "bls_html_fallback",
-                "source": BLS_SOURCE_NAME,
-                "source_period": BLS_OEWS_PERIOD,
-                "source_url": BLS_OEWS_URL,
-            }
+            occupation_code = BLS_TITLE_TO_OCCUPATION_CODE.get(mapped)
+            return {"available": True, **record, "occupation_code": occupation_code, "soc_code": _soc_from_bls_code(occupation_code), "mapped_occupation": mapped, "mapping_method": "explicit_conservative_mapping", "retrieval_method": "bls_html_fallback", "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_OEWS_URL}
     except Exception as html_exc:
-        return {
-            "available": False,
-            "reason": f"BLS API unavailable ({api_error or 'no data'}); HTML fallback unavailable ({html_exc}).",
-            "mapped_occupation": mapped,
-            "source": BLS_SOURCE_NAME,
-            "source_period": BLS_OEWS_PERIOD,
-            "source_url": BLS_API_URL,
-        }
-
-    return {
-        "available": False,
-        "reason": f"The mapped BLS occupation '{mapped}' was not found. API detail: {api_error or 'no current data returned'}.",
-        "mapped_occupation": mapped,
-        "source": BLS_SOURCE_NAME,
-        "source_period": BLS_OEWS_PERIOD,
-        "source_url": BLS_API_URL,
-    }
+        return {"available": False, "reason": f"BLS API unavailable ({api_error or 'no data'}); HTML fallback unavailable ({html_exc}).", "mapped_occupation": mapped, "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_API_URL}
+    return {"available": False, "reason": f"The mapped BLS occupation '{mapped}' was not found. API detail: {api_error or 'no current data returned'}.", "mapped_occupation": mapped, "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_API_URL}
 
 
-def lookup_onet_occupation(career_title: str) -> Dict[str, Any]:
+def lookup_onet_occupation(career_title: str, bls_soc_code: Optional[str] = None) -> Dict[str, Any]:
     target = _mapped_title(career_title, CAREER_TO_ONET_TITLE) or career_title
     target_norm = _normalize(target)
     rows = _onet_rows()
     exact = next((row for row in rows if _normalize(row.get("title")) == target_norm), None)
     if exact:
-        best = exact
-        method = "explicit_or_exact_title"
-        score = 1.0
+        best, method, score = exact, "explicit_or_exact_title", 1.0
     else:
-        ranked = sorted(
-            ((SequenceMatcher(None, target_norm, _normalize(row.get("title"))).ratio(), row) for row in rows),
-            key=lambda item: item[0], reverse=True,
-        )
+        candidates = rows
+        if bls_soc_code:
+            same_family = [row for row in rows if _onet_base_soc(row.get("onetsoc_code")) == bls_soc_code]
+            if same_family:
+                candidates = same_family
+        ranked = sorted(((SequenceMatcher(None, target_norm, _normalize(row.get("title"))).ratio(), row) for row in candidates), key=lambda item: item[0], reverse=True)
         score, best = ranked[0] if ranked else (0.0, None)
-        method = "title_similarity"
+        method = "soc_family_title_similarity" if bls_soc_code and candidates is not rows else "title_similarity"
     if not best or score < 0.70:
-        return {
-            "available": False,
-            "reason": "No sufficiently close O*NET occupation match was found.",
-            "source": ONET_SOURCE_NAME,
-            "source_release": ONET_RELEASE,
-            "source_url": ONET_OCCUPATION_DATA_URL,
-        }
-    return {
-        "available": True,
-        "onet_soc_code": best.get("onetsoc_code"),
-        "occupation_title": best.get("title"),
-        "description": best.get("description"),
-        "match_score": round(score, 4),
-        "mapping_method": method,
-        "source": ONET_SOURCE_NAME,
-        "source_release": ONET_RELEASE,
-        "source_url": ONET_OCCUPATION_DATA_URL,
-    }
+        return {"available": False, "reason": "No sufficiently close O*NET occupation match was found.", "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
+    return {"available": True, "onet_soc_code": best.get("onetsoc_code"), "base_soc_code": _onet_base_soc(best.get("onetsoc_code")), "occupation_title": best.get("title"), "description": best.get("description"), "match_score": round(score, 4), "mapping_method": method, "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
+
+
+def _build_crosswalk(career_title: str, bls: Dict[str, Any], onet: Dict[str, Any]) -> Dict[str, Any]:
+    bls_title = bls.get("occupation_title") or bls.get("mapped_occupation") if bls else None
+    onet_title = onet.get("occupation_title") if onet else None
+    bls_soc = bls.get("soc_code") if bls else None
+    onet_base = onet.get("base_soc_code") or _onet_base_soc(onet.get("onet_soc_code")) if onet else None
+    if not (bls and bls.get("available") and onet and onet.get("available")):
+        relationship = "partial_mapping"
+    elif _normalize(bls_title) == _normalize(onet_title):
+        relationship = "same_occupation_title"
+    elif bls_soc and onet_base and bls_soc == onet_base:
+        relationship = "same_soc_family_different_detail"
+    else:
+        relationship = "different_occupation_mappings"
+    return {"requested_career": career_title, "relationship": relationship, "bls_occupation_title": bls_title, "bls_soc_code": bls_soc, "onet_occupation_title": onet_title, "onet_soc_code": onet.get("onet_soc_code") if onet else None, "same_soc_family": bool(bls_soc and onet_base and bls_soc == onet_base)}
 
 
 def get_market_intelligence(career_title: str) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
-        "career_title": career_title,
-        "retrieved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "bls": None,
-        "onet": None,
-        "warnings": [],
-    }
+    result: Dict[str, Any] = {"career_title": career_title, "retrieved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "bls": None, "onet": None, "crosswalk": None, "warnings": []}
     try:
         result["bls"] = lookup_bls_market(career_title)
     except Exception as exc:
-        result["bls"] = {
-            "available": False,
-            "reason": f"BLS lookup unavailable: {exc}",
-            "source": BLS_SOURCE_NAME,
-            "source_period": BLS_OEWS_PERIOD,
-            "source_url": BLS_API_URL,
-        }
+        result["bls"] = {"available": False, "reason": f"BLS lookup unavailable: {exc}", "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_API_URL}
         result["warnings"].append("BLS market data could not be refreshed; career matching is unaffected.")
     try:
-        result["onet"] = lookup_onet_occupation(career_title)
+        bls_soc = result["bls"].get("soc_code") if result["bls"] else None
+        result["onet"] = lookup_onet_occupation(career_title, bls_soc)
     except Exception as exc:
-        result["onet"] = {
-            "available": False,
-            "reason": f"O*NET lookup unavailable: {exc}",
-            "source": ONET_SOURCE_NAME,
-            "source_release": ONET_RELEASE,
-            "source_url": ONET_OCCUPATION_DATA_URL,
-        }
+        result["onet"] = {"available": False, "reason": f"O*NET lookup unavailable: {exc}", "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
         result["warnings"].append("O*NET occupation detail could not be refreshed; career matching is unaffected.")
+    result["crosswalk"] = _build_crosswalk(career_title, result["bls"], result["onet"])
     result["available"] = bool(result["bls"].get("available") or result["onet"].get("available"))
     return result
