@@ -1,44 +1,69 @@
 """Final production bootstrap for Skills Pathfinder.
 
-Loads the resume-first evidence API, installs skill-quality patches, adds generic
-regulated-profession support, installs evidence-aware report generation, and ensures
-career recommendations are recalculated from the complete structured resume profile.
+Loads the resume-first evidence API, installs skill-quality patches, uses generic
+AI-driven career discovery for any profession, installs evidence-aware report
+generation, and keeps the local career catalog only as a resilient fallback.
 """
 
 from fastapi import File, UploadFile
 
 from evidence_server import app, enhanced_upload
-import evidence_server as evidence_module
 import main as main_module
-import market_intelligence as market_module
 import recommendation_engine as recommendation_module
-from regulated_profession_support import install_regulated_profession_support
+from dynamic_career_discovery import discover_dynamic_careers, merge_recommendations
 from report_evidence_support import install_evidence_aware_report
 from server import resilient_llm_generate
 from skill_quality import install_main_skill_patch
 
 install_main_skill_patch(main_module)
-install_regulated_profession_support(
-    evidence_module,
-    recommendation_module,
-    market_module,
-)
 install_evidence_aware_report(app, resilient_llm_generate)
 
 
 async def structured_resume_upload(file: UploadFile = File(...)):
-    """Run normal resume extraction, then score careers from the full evidence object."""
+    """Extract evidence, discover careers generically, then score deterministically.
+
+    The catalog is no longer the occupation gate. Groq identifies plausible careers
+    from the complete structured resume and supplies competency blueprints. Our own
+    scoring code calculates readiness from evidence. If dynamic discovery is
+    temporarily unavailable, the existing catalog scorer remains as a fallback.
+    """
+
     result = await enhanced_upload(file)
-    result["recommendations"] = recommendation_module.get_career_recommendations(
-        result.get("extracted_skills") or [],
+    skills = result.get("extracted_skills") or []
+    structured = result.get("structured_evidence") or {}
+
+    catalog_results = recommendation_module.get_career_recommendations(
+        skills,
         top_n=8,
-        structured_evidence=result.get("structured_evidence") or {},
+        structured_evidence=structured,
     )
+
+    try:
+        career_profile, dynamic_results = await discover_dynamic_careers(
+            structured,
+            skills,
+            resilient_llm_generate,
+            max_careers=6,
+        )
+        result["career_profile"] = career_profile
+        result["dynamic_career_discovery"] = True
+        result["recommendations"] = merge_recommendations(
+            dynamic_results,
+            catalog_results,
+            top_n=8,
+        )
+    except Exception as exc:
+        print(f"[DYNAMIC CAREER DISCOVERY] Falling back to local catalog: {exc}")
+        result["career_profile"] = {}
+        result["dynamic_career_discovery"] = False
+        result["dynamic_career_discovery_error"] = str(exc)
+        result["recommendations"] = catalog_results
+
     return result
 
 
 # Replace the resume endpoints at runtime so all resume-path recommendations use
-# education, experience, projects, publications, credentials and normalized skills.
+# the complete evidence profile and generic career discovery.
 app.router.routes = [
     route for route in app.router.routes
     if not (
