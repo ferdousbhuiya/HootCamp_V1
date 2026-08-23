@@ -1,8 +1,8 @@
 """Final production bootstrap for Skills Pathfinder.
 
 Loads the resume-first evidence API, installs skill-quality patches, adds generic
-regulated-profession support, and ensures career recommendations are recalculated
-from the complete structured resume profile instead of skill names alone.
+regulated-profession support, installs evidence-aware report generation, and ensures
+career recommendations are recalculated from the complete structured resume profile.
 """
 
 from fastapi import File, UploadFile
@@ -13,6 +13,8 @@ import main as main_module
 import market_intelligence as market_module
 import recommendation_engine as recommendation_module
 from regulated_profession_support import install_regulated_profession_support
+from report_evidence_support import install_evidence_aware_report
+from server import resilient_llm_generate
 from skill_quality import install_main_skill_patch
 
 install_main_skill_patch(main_module)
@@ -21,6 +23,7 @@ install_regulated_profession_support(
     recommendation_module,
     market_module,
 )
+install_evidence_aware_report(app, resilient_llm_generate)
 
 
 async def structured_resume_upload(file: UploadFile = File(...)):
