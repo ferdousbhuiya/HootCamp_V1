@@ -51,9 +51,6 @@
   }
 }
 
-/* Authenticated workspace visual system.
-   These overrides intentionally change presentation only. Existing feature,
-   Supabase, upload, verification, and recommendation logic remains untouched. */
 .authenticated-shell {
   min-height: 100vh;
   background:
@@ -158,8 +155,6 @@
   background-color: rgba(240, 253, 250, 0.7);
 }
 
-/* Persistent report action. The existing report component remains the source of truth;
-   this simply exposes the same action in the primary workspace navigation. */
 .authenticated-shell .workspace-report-button {
   border: 1px solid rgba(52, 211, 153, 0.4);
   background: rgba(16, 185, 129, 0.14);
@@ -178,7 +173,6 @@
   display: none !important;
 }
 
-/* Profile & Evidence navigation. */
 .authenticated-shell .evidence-navigation {
   overflow: hidden;
   border-radius: 1.35rem !important;
@@ -278,9 +272,167 @@
   color: #0f766e;
 }
 
+.workspace-mobile-toggle,
+.workspace-mobile-menu,
+.mobile-auth-actions {
+  display: none;
+}
+
 @media (max-width: 1023px) {
   .authenticated-shell .evidence-navigation-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .auth-landing-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: rgba(255,255,255,0.96) !important;
+    box-shadow: 0 10px 28px -24px rgba(15,23,42,0.6);
+  }
+
+  .auth-landing-row {
+    gap: 0.75rem;
+    padding: 0.75rem 1rem !important;
+  }
+
+  .auth-landing-row > div:first-child {
+    min-width: 0;
+  }
+
+  .auth-landing-row > div:first-child > div:last-child > div:first-child {
+    font-size: 0.92rem;
+  }
+
+  .auth-landing-row > div:first-child > div:last-child > div:last-child {
+    display: none;
+  }
+
+  .auth-desktop-actions {
+    display: none !important;
+  }
+
+  .mobile-auth-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-left: auto;
+  }
+
+  .mobile-auth-primary,
+  .mobile-auth-secondary {
+    min-height: 2.45rem;
+    border-radius: 0.8rem;
+    padding: 0 0.8rem;
+    font-size: 0.78rem;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .mobile-auth-primary {
+    border: 1px solid #0f172a;
+    background: #0f172a;
+    color: white;
+    box-shadow: 0 8px 18px -12px rgba(15,23,42,0.75);
+  }
+
+  .mobile-auth-secondary {
+    border: 1px solid #cbd5e1;
+    background: white;
+    color: #334155;
+  }
+
+  .authenticated-shell .workspace-nav-shell {
+    position: relative;
+    justify-content: space-between;
+  }
+
+  .authenticated-shell .workspace-desktop-nav {
+    display: none !important;
+  }
+
+  .workspace-mobile-toggle {
+    display: inline-flex;
+    min-height: 2.6rem;
+    align-items: center;
+    gap: 0.55rem;
+    margin-left: auto;
+    border: 1px solid rgba(94,234,212,0.35);
+    border-radius: 0.85rem;
+    background: rgba(15,118,110,0.22);
+    padding: 0 0.8rem;
+    color: #ecfeff;
+    font-size: 0.8rem;
+    font-weight: 800;
+    box-shadow: 0 8px 22px -16px rgba(20,184,166,0.9);
+  }
+
+  .workspace-mobile-toggle-icon {
+    font-size: 1rem;
+  }
+
+  .workspace-mobile-toggle-chevron {
+    color: #99f6e4;
+    font-size: 0.95rem;
+  }
+
+  .workspace-mobile-menu {
+    position: absolute;
+    top: calc(100% + 0.55rem);
+    right: 0;
+    z-index: 80;
+    width: min(21rem, calc(100vw - 2rem));
+    border: 1px solid rgba(148,163,184,0.35);
+    border-radius: 1rem;
+    background: rgba(15,23,42,0.98);
+    padding: 0.5rem;
+    box-shadow: 0 24px 55px -24px rgba(2,6,23,0.95);
+    backdrop-filter: blur(16px);
+  }
+
+  .workspace-mobile-menu.is-open {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .workspace-mobile-menu-item {
+    display: grid;
+    grid-template-columns: 2rem minmax(0,1fr) auto;
+    align-items: center;
+    gap: 0.65rem;
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: 0.75rem;
+    background: transparent;
+    padding: 0.72rem 0.75rem;
+    color: #cbd5e1;
+    text-align: left;
+    font-size: 0.84rem;
+    font-weight: 750;
+  }
+
+  .workspace-mobile-menu-item:hover,
+  .workspace-mobile-menu-item.is-active {
+    border-color: rgba(45,212,191,0.28);
+    background: rgba(20,184,166,0.14);
+    color: white;
+  }
+
+  .workspace-mobile-menu-icon {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    border-radius: 0.6rem;
+    background: rgba(255,255,255,0.07);
+    color: #5eead4;
+  }
+
+  .workspace-mobile-menu-arrow {
+    color: #64748b;
+    font-size: 1.2rem;
   }
 }
 
@@ -292,5 +444,15 @@
   .authenticated-shell .workspace-report-button {
     padding-left: 0.75rem !important;
     padding-right: 0.75rem !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .mobile-auth-secondary {
+    display: none;
+  }
+
+  .mobile-auth-primary {
+    padding: 0 0.7rem;
   }
 }
