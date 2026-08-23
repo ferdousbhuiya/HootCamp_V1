@@ -1,33 +1,29 @@
 """Final production bootstrap for Skills Pathfinder.
 
-Loads the resume-first evidence API, installs skill-quality patches, uses generic
-AI-driven career discovery for any profession, installs evidence-aware report
-generation, and keeps the local career catalog only as a resilient fallback.
+Uses one profession-neutral AI pass to extract resume evidence and candidate career
+blueprints, then scores those blueprints deterministically. The local catalog remains
+a resilient fallback rather than an occupation gate.
 """
 
 from fastapi import File, UploadFile
 
+import evidence_server as evidence_module
 from evidence_server import app, enhanced_upload
 import main as main_module
 import recommendation_engine as recommendation_module
+from combined_resume_intelligence import install_combined_resume_intelligence
 from dynamic_career_discovery import discover_dynamic_careers, merge_recommendations
 from report_evidence_support import install_evidence_aware_report
 from server import resilient_llm_generate
 from skill_quality import install_main_skill_patch
 
 install_main_skill_patch(main_module)
+install_combined_resume_intelligence(evidence_module, resilient_llm_generate)
 install_evidence_aware_report(app, resilient_llm_generate)
 
 
 async def structured_resume_upload(file: UploadFile = File(...)):
-    """Extract evidence, discover careers generically, then score deterministically.
-
-    The catalog is no longer the occupation gate. Groq identifies plausible careers
-    from the complete structured resume and supplies competency blueprints. Our own
-    scoring code calculates readiness from evidence. If dynamic discovery is
-    temporarily unavailable, the existing catalog scorer remains as a fallback.
-    """
-
+    """Extract evidence, discover careers generically, then score deterministically."""
     result = await enhanced_upload(file)
     skills = result.get("extracted_skills") or []
     structured = result.get("structured_evidence") or {}
@@ -46,15 +42,13 @@ async def structured_resume_upload(file: UploadFile = File(...)):
             max_careers=6,
         )
         result["career_profile"] = career_profile
-        result["dynamic_career_discovery"] = True
-        result["recommendations"] = merge_recommendations(
-            dynamic_results,
-            catalog_results,
-            top_n=8,
-        )
+        result["dynamic_career_discovery"] = bool(dynamic_results)
+        result["recommendations"] = merge_recommendations(dynamic_results, catalog_results, top_n=8)
+        if not result["recommendations"]:
+            result["career_discovery_warning"] = "No evidence-supported career recommendations were produced."
     except Exception as exc:
         print(f"[DYNAMIC CAREER DISCOVERY] Falling back to local catalog: {exc}")
-        result["career_profile"] = {}
+        result["career_profile"] = structured.get("career_profile") or {}
         result["dynamic_career_discovery"] = False
         result["dynamic_career_discovery_error"] = str(exc)
         result["recommendations"] = catalog_results
@@ -62,8 +56,6 @@ async def structured_resume_upload(file: UploadFile = File(...)):
     return result
 
 
-# Replace the resume endpoints at runtime so all resume-path recommendations use
-# the complete evidence profile and generic career discovery.
 app.router.routes = [
     route for route in app.router.routes
     if not (
