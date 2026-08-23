@@ -150,6 +150,10 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
       setMarketLoading(true);
       const next = {};
       await Promise.all(rankedRecommendations.slice(0, 5).map(async (career) => {
+        if (career?.market_data?.bls?.available || career?.market_data?.onet?.available) {
+          next[career.id || career.path || career.career_title] = career.market_data;
+          return;
+        }
         try {
           const title = career.path || career.career_title || '';
           const response = await fetch(`${apiBase()}/api/market-data?career_title=${encodeURIComponent(title)}`);
@@ -167,7 +171,7 @@ const CareerRecommendations = ({ skills, user, onBack }) => {
     return () => { cancelled = true; };
   }, [rankedRecommendations]);
 
-  const marketFor = (rec) => marketData[rec?.id || rec?.path || rec?.career_title] || null;
+  const marketFor = (rec) => marketData[rec?.id || rec?.path || rec?.career_title] || rec?.market_data || null;
   const salaryFor = (rec) => {
     const bls = marketFor(rec)?.bls;
     return bls?.available && bls.mean_annual_wage ? currency(bls.mean_annual_wage) : (rec?.median_salary || 'Not available');
