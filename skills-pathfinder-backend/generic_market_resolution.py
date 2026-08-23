@@ -132,23 +132,66 @@ JOB TITLE: {career_title}"""
     })
 
 
+def _safe_existing_market(career_title: str) -> Dict[str, Any]:
+    """Never let the legacy/conservative lookup prevent generic resolution."""
+    try:
+        result = market.get_market_intelligence(career_title)
+        return result if isinstance(result, dict) else {}
+    except Exception as exc:
+        return {
+            "career_title": career_title,
+            "bls": {"available": False, "reason": f"Initial market lookup unavailable: {type(exc).__name__}: {exc}"},
+            "onet": {"available": False},
+            "warnings": ["Initial market lookup failed; generic occupation resolution was attempted."],
+            "available": False,
+        }
+
+
+async def _generic_resolution(career_title: str, resilient_llm_generate) -> Optional[Dict[str, Any]]:
+    # Try the title itself first. This is fast for official and near-official occupation names.
+    resolved = _direct_onet_soc_resolution(career_title)
+    if resolved:
+        return resolved
+
+    # Then resolve specialty/colloquial titles to a broad occupation family and validate it.
+    return await _ai_family_resolution(career_title, resilient_llm_generate)
+
+
 def install_generic_market_route(app, resilient_llm_generate):
     async def generic_market_data(career_title: str = Query(..., min_length=2, max_length=180)):
-        # Preserve existing exact/conservative mappings when they already work.
-        direct = market.get_market_intelligence(career_title)
+        # The previous implementation called the legacy market service outside a try/except.
+        # A transient BLS/O*NET failure could therefore abort this route before the generic
+        # resolver ran. Keep the legacy result when it succeeds, but never make it a gate.
+        direct = _safe_existing_market(career_title)
         if (direct.get("bls") or {}).get("available"):
             direct["title_resolution"] = {"method": "existing_confirmed_mapping", "requested_title": career_title}
             return {"status": "success", "market_data": direct}
 
-        # Generic path 1: detailed O*NET occupation -> base SOC -> OEWS.
-        resolved = _direct_onet_soc_resolution(career_title)
+        resolved = await _generic_resolution(career_title, resilient_llm_generate)
         if resolved:
             return {"status": "success", "market_data": resolved}
 
-        # Generic path 2: colloquial/specialty title -> AI family hint -> O*NET validation -> OEWS.
-        resolved = await _ai_family_resolution(career_title, resilient_llm_generate)
-        if resolved:
-            return {"status": "success", "market_data": resolved}
+        # One more useful fallback: if the AI hint resolved to a title that the conservative
+        # service knows but live SOC retrieval was temporarily unavailable, reuse that
+        # confirmed service result rather than silently dropping all market information.
+        try:
+            prompt = f"""Map this job title or specialty to the closest broad U.S. occupation title used for official labor-market statistics.
+Return only JSON: {{"occupation_title_hint":""}}. Do not return salary or employment numbers.
+JOB TITLE: {career_title}"""
+            raw = await resilient_llm_generate(prompt, max_tokens_override=220)
+            hint = str((json.loads(raw) or {}).get("occupation_title_hint") or "").strip()
+            if hint:
+                hinted = _safe_existing_market(hint)
+                if (hinted.get("bls") or {}).get("available"):
+                    hinted["career_title"] = career_title
+                    hinted["title_resolution"] = {
+                        "method": "ai_family_hint_existing_confirmed_mapping",
+                        "requested_title": career_title,
+                        "occupation_title_hint": hint,
+                    }
+                    return {"status": "success", "market_data": hinted}
+        except Exception:
+            pass
 
         direct.setdefault("title_resolution", {"method": "unresolved", "requested_title": career_title})
         return {"status": "success", "market_data": direct}
