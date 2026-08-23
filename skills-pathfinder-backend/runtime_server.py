@@ -1,18 +1,26 @@
 """Final production bootstrap for Skills Pathfinder.
 
-Loads the resume-first evidence API, installs skill-quality patches, and ensures
-career recommendations are recalculated from the complete structured resume
-profile instead of skill names alone.
+Loads the resume-first evidence API, installs skill-quality patches, adds generic
+regulated-profession support, and ensures career recommendations are recalculated
+from the complete structured resume profile instead of skill names alone.
 """
 
 from fastapi import File, UploadFile
 
 from evidence_server import app, enhanced_upload
+import evidence_server as evidence_module
 import main as main_module
+import market_intelligence as market_module
 import recommendation_engine as recommendation_module
+from regulated_profession_support import install_regulated_profession_support
 from skill_quality import install_main_skill_patch
 
 install_main_skill_patch(main_module)
+install_regulated_profession_support(
+    evidence_module,
+    recommendation_module,
+    market_module,
+)
 
 
 async def structured_resume_upload(file: UploadFile = File(...)):
@@ -27,7 +35,7 @@ async def structured_resume_upload(file: UploadFile = File(...)):
 
 
 # Replace the resume endpoints at runtime so all resume-path recommendations use
-# education, experience, projects and publications together with normalized skills.
+# education, experience, projects, publications, credentials and normalized skills.
 app.router.routes = [
     route for route in app.router.routes
     if not (
