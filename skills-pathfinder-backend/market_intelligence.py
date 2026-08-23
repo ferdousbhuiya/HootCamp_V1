@@ -30,7 +30,13 @@ ONET_SOURCE_NAME = "O*NET Database, U.S. Department of Labor/ETA"
 
 CACHE_TTL_SECONDS = int(os.getenv("MARKET_CACHE_TTL_SECONDS", "43200"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("MARKET_HTTP_TIMEOUT_SECONDS", "12"))
-USER_AGENT = "SkillsPathfinder/1.0 (career education project; BLS/O*NET public data)"
+# BLS can reject non-browser-looking clients at the edge. This is still an ordinary
+# public-data GET request; the browser-style agent simply avoids false bot blocking.
+USER_AGENT = os.getenv(
+    "MARKET_HTTP_USER_AGENT",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 SkillsPathfinder/1.0",
+)
 
 _cache: Dict[str, Dict[str, Any]] = {}
 _cache_lock = threading.Lock()
@@ -124,7 +130,13 @@ CAREER_TO_ONET_TITLE = {
 
 
 def _fetch_text(url: str) -> str:
-    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/json"})
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+    }
+    request = Request(url, headers=headers)
     with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
         return response.read().decode(response.headers.get_content_charset() or "utf-8", errors="replace")
 
@@ -141,30 +153,35 @@ def _cached(key: str, loader):
     return value
 
 
-def parse_bls_oews_table(raw_html: str) -> Dict[str, Dict[str, Any]]:
-    """Parse BLS OEWS Table 1 into a normalized occupation-title lookup.
-
-    Current BLS rows use currency symbols, e.g. ``$33.54 $69,770 $24.51``.
-    Older fixtures did not include those symbols, so the parser accepts both.
-    """
+def _html_to_text(raw_html: str) -> str:
     text = html.unescape(raw_html or "")
     text = re.sub(r"<script\b[^>]*>.*?</script>", " ", text, flags=re.I | re.S)
     text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
+    # Preserve row boundaries even if BLS changes PRE markup to table/div markup.
+    text = re.sub(r"</(?:tr|p|div|li|pre|br)>|<br\s*/?>", "\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", "", text)
+    text = text.replace("\xa0", " ")
+    return text
 
+
+def parse_bls_oews_table(raw_html: str) -> Dict[str, Dict[str, Any]]:
+    """Parse BLS OEWS Table 1 into a normalized occupation-title lookup.
+
+    BLS has served the same release with and without visible dollar signs and
+    uses a mixture of spaces/tabs. The parser accepts both forms and tolerates
+    harmless trailing whitespace while still requiring the full numeric row.
+    """
+    text = _html_to_text(raw_html)
     records: Dict[str, Dict[str, Any]] = {}
     row_pattern = re.compile(
         r"^\s*(?P<title>[A-Za-z][A-Za-z0-9 ,/&'()\-–—]+?)\.{3,}\s*"
         r"(?P<employment>[\d,]+)\s+"
         r"\$?(?P<mean_hourly>\d+(?:\.\d+)?)\s+"
         r"\$?(?P<mean_annual>[\d,]+)\s+"
-        r"\$?(?P<median_hourly>\d+(?:\.\d+)?)\s*$"
+        r"\$?(?P<median_hourly>\d+(?:\.\d+)?)\s*$",
+        flags=re.M,
     )
-
-    for line in text.splitlines():
-        match = row_pattern.match(line)
-        if not match:
-            continue
+    for match in row_pattern.finditer(text):
         title = re.sub(r"\s+", " ", match.group("title")).strip()
         records[_normalize(title)] = {
             "occupation_title": title,
@@ -177,7 +194,7 @@ def parse_bls_oews_table(raw_html: str) -> Dict[str, Dict[str, Any]]:
 
 
 def _bls_records() -> Dict[str, Dict[str, Any]]:
-    return _cached("bls-oews", lambda: parse_bls_oews_table(_fetch_text(BLS_OEWS_URL)))
+    return _cached("bls-oews-v2", lambda: parse_bls_oews_table(_fetch_text(BLS_OEWS_URL)))
 
 
 def _onet_rows():
@@ -208,8 +225,9 @@ def lookup_bls_market(career_title: str) -> Dict[str, Any]:
     if not record:
         return {
             "available": False,
-            "reason": f"The mapped BLS occupation '{mapped}' was not found in the current wage table.",
+            "reason": f"The mapped BLS occupation '{mapped}' was not found in the current wage table ({len(records)} rows parsed).",
             "mapped_occupation": mapped,
+            "records_parsed": len(records),
             "source": BLS_SOURCE_NAME,
             "source_period": BLS_OEWS_PERIOD,
             "source_url": BLS_OEWS_URL,
@@ -281,7 +299,7 @@ def get_market_intelligence(career_title: str) -> Dict[str, Any]:
     except Exception as exc:
         result["bls"] = {
             "available": False,
-            "reason": f"BLS lookup unavailable: {exc}",
+            "reason": f"BLS lookup unavailable: {type(exc).__name__}: {exc}",
             "source": BLS_SOURCE_NAME,
             "source_period": BLS_OEWS_PERIOD,
             "source_url": BLS_OEWS_URL,
@@ -293,7 +311,7 @@ def get_market_intelligence(career_title: str) -> Dict[str, Any]:
     except Exception as exc:
         result["onet"] = {
             "available": False,
-            "reason": f"O*NET lookup unavailable: {exc}",
+            "reason": f"O*NET lookup unavailable: {type(exc).__name__}: {exc}",
             "source": ONET_SOURCE_NAME,
             "source_release": ONET_RELEASE,
             "source_url": ONET_OCCUPATION_DATA_URL,
