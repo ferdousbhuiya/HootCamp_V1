@@ -45,8 +45,6 @@ def _token_similarity(left: Any, right: Any) -> float:
     overlap = len(a & b)
     if not overlap:
         return 0.0
-    # Containment matters more than raw Jaccard for titles such as
-    # "Healthcare Operations Manager" -> "Healthcare Administrator".
     containment = overlap / min(len(a), len(b))
     jaccard = overlap / len(a | b)
     return min(1.0, 0.72 * containment + 0.28 * jaccard)
@@ -85,12 +83,7 @@ def _occupational_alignment(
     candidate: Dict[str, Any],
     structured_evidence: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Estimate direct profession/domain alignment without profession-specific rules.
-
-    Core skill fit answers "can this person demonstrate the work?" Alignment answers
-    "is this actually their documented profession/domain?" Direct role, education,
-    credential and project evidence should outrank merely transferable competencies.
-    """
+    """Estimate direct profession/domain alignment without profession-specific rules."""
     title = str(candidate.get("canonical_title") or "")
     category = str(candidate.get("career_category") or "")
     summary = str(candidate.get("career_summary") or "")
@@ -141,6 +134,17 @@ def _compact(items: Any, fields: Iterable[str], limit: int = 20) -> List[Dict[st
         if row:
             rows.append(row)
     return rows
+
+
+def _compact_profile(structured_evidence: Dict[str, Any], extracted_skills: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "skills": [{"name": x.get("name"), "category": x.get("category")} for x in (extracted_skills or [])[:80] if isinstance(x, dict) and x.get("name")],
+        "education": _compact(structured_evidence.get("education"), ["program_or_degree", "field_of_study", "institution"], 10),
+        "experience": _compact(structured_evidence.get("experience"), ["role", "employer", "responsibilities", "skills_demonstrated"], 15),
+        "credentials": _compact(structured_evidence.get("certifications"), ["name", "provider"], 15),
+        "projects": _compact(structured_evidence.get("projects"), ["name", "description", "skills_demonstrated"], 10),
+        "total_experience_years": structured_evidence.get("total_experience_years"),
+    }
 
 
 def build_scoring_evidence(structured_evidence: Dict[str, Any], extracted_skills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -200,6 +204,68 @@ def _sanitize_profile(raw: Any) -> Dict[str, Any]:
     }
 
 
+def _candidate_is_direct(profile: Dict[str, Any], candidate: Dict[str, Any], structured_evidence: Dict[str, Any]) -> bool:
+    relation = _norm(candidate.get("candidate_relation") or "")
+    if relation in {"current profession", "current_profession", "specialization"}:
+        return True
+    alignment = _occupational_alignment(_sanitize_profile(profile), candidate, structured_evidence)
+    return alignment["direct_role_or_profile"] >= 55.0 and alignment["domain_education_credential_project"] >= 35.0
+
+
+def _needs_direct_recovery(profile: Dict[str, Any], candidates: List[Dict[str, Any]], structured_evidence: Dict[str, Any]) -> bool:
+    usable = [c for c in candidates if isinstance(c, dict) and c.get("canonical_title") and _safe_list(c.get("core_competencies"))]
+    if len(usable) < 3:
+        return True
+    return not any(_candidate_is_direct(profile, candidate, structured_evidence) for candidate in usable)
+
+
+def _merge_candidate_payloads(primary: List[Dict[str, Any]], recovery: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen = set()
+    # Recovery candidates are placed first because this path only runs when direct
+    # profession coverage is missing or the original candidate set is incomplete.
+    for item in list(recovery or []) + list(primary or []):
+        if not isinstance(item, dict):
+            continue
+        key = _norm(item.get("canonical_title"))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+async def _recover_direct_candidates(
+    structured_evidence: Dict[str, Any],
+    extracted_skills: List[Dict[str, Any]],
+    existing_profile: Dict[str, Any],
+    resilient_llm_generate,
+    max_careers: int,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Small, targeted recovery call used only when direct-profession coverage is missing.
+
+    This is deliberately profession-neutral. It asks for the documented current profession
+    and same-domain paths, not a particular occupation. It also keeps the expensive second
+    call out of the normal path when the first extraction already produced good candidates.
+    """
+    compact_profile = _compact_profile(structured_evidence, extracted_skills)
+    prompt = f"""The first career-candidate pass was incomplete. Recover the person's DIRECT current profession and up to two same-domain specialization/advancement paths from the resume evidence below.
+Do not suggest unrelated transferable-skill pivots in this recovery pass. Do not invent credentials, experience, or a profession not supported by job titles, education, credentials, projects, or the existing career profile.
+For every career return 5-8 core competencies and evidence keywords. Do NOT calculate match percentages.
+Return ONLY JSON: {{"profile":{{"primary_profession":"","professional_level":"","domain":"","specializations":[],"summary":""}},"careers":[{{"canonical_title":"","career_category":"","career_summary":"","candidate_relation":"current_profession|specialization|advancement","candidate_confidence":0.0,"candidate_evidence":[],"regulated_role":false,"regulation_note":"","core_competencies":[],"competency_evidence_map":[{{"competency":"","evidence_keywords":[]}}],"domain_relevance_keywords":[],"recommended_subjects":[],"education_or_training_pathway":[],"credentials_or_licensing_areas":[],"experience_or_portfolio_evidence":[],"actions_30_days":[],"actions_6_months":[],"actions_1_year":[]}}]}}
+EXISTING_PROFILE:{json.dumps(existing_profile or {})}
+RESUME_EVIDENCE:{json.dumps(compact_profile)}"""
+    try:
+        raw = await resilient_llm_generate(prompt, max_tokens_override=1900)
+        payload = json.loads(raw)
+    except Exception as exc:
+        print(f"[DIRECT CAREER RECOVERY] unavailable: {type(exc).__name__}: {exc}")
+        return existing_profile or {}, []
+    return payload.get("profile") or existing_profile or {}, _safe_list(payload.get("careers"))
+
+
 def merge_recommendations(dynamic_results: List[Dict[str, Any]], catalog_results: List[Dict[str, Any]], top_n: int = 8) -> List[Dict[str, Any]]:
     merged = {}
     for source_name, items in (("dynamic", dynamic_results), ("catalog", catalog_results)):
@@ -254,9 +320,6 @@ def _score_candidates(
         scoring = score_blueprint(scoring_evidence, blueprint)
         alignment = _occupational_alignment(sanitized_profile, candidate, structured_evidence)
 
-        # Blend demonstrated competency fit with direct occupational/domain alignment.
-        # This prevents a transferable-skills career from outranking the documented
-        # profession while still allowing legitimate career-change recommendations.
         base_score = float(scoring.get("match_score") or 0)
         aligned_score = min(1.0, 0.72 * base_score + 0.28 * alignment["score"])
         scoring["competency_match_score"] = round(base_score, 4)
@@ -298,32 +361,43 @@ async def discover_dynamic_careers(structured_evidence: Dict[str, Any], extracte
     """Discover careers generically, preferring intelligence from the extraction call."""
     structured_evidence = structured_evidence or {}
     scoring_evidence = build_scoring_evidence(structured_evidence, extracted_skills)
-
+    embedded_profile = structured_evidence.get("career_profile") or {}
     embedded_candidates = _safe_list(structured_evidence.get("career_candidates"))
-    if embedded_candidates:
-        return _score_candidates(
-            structured_evidence.get("career_profile") or {},
-            embedded_candidates,
-            scoring_evidence,
-            structured_evidence,
-            max_careers,
-        )
 
-    compact_profile = {
-        "skills": [{"name": x.get("name"), "category": x.get("category")} for x in (extracted_skills or [])[:80] if isinstance(x, dict) and x.get("name")],
-        "education": _compact(structured_evidence.get("education"), ["program_or_degree", "field_of_study", "institution"], 10),
-        "experience": _compact(structured_evidence.get("experience"), ["role", "employer", "responsibilities", "skills_demonstrated"], 15),
-        "credentials": _compact(structured_evidence.get("certifications"), ["name", "provider"], 15),
-        "projects": _compact(structured_evidence.get("projects"), ["name", "description", "skills_demonstrated"], 10),
-        "total_experience_years": structured_evidence.get("total_experience_years"),
-    }
-    prompt = f"""Analyze this resume evidence for ANY profession. Return 3-{max_careers} evidence-supported careers. Prioritize the current profession and natural specialties/advancement paths. Do not invent credentials or experience. Return ONLY JSON: {{"profile":{{"primary_profession":"","professional_level":"","domain":"","specializations":[],"summary":""}},"careers":[{{"canonical_title":"","career_category":"","career_summary":"","candidate_relation":"current_profession|specialization|advancement|adjacent","candidate_confidence":0.0,"candidate_evidence":[],"regulated_role":false,"regulation_note":"","core_competencies":[],"competency_evidence_map":[{{"competency":"","evidence_keywords":[]}}],"domain_relevance_keywords":[],"recommended_subjects":[],"education_or_training_pathway":[],"credentials_or_licensing_areas":[],"experience_or_portfolio_evidence":[],"actions_30_days":[],"actions_6_months":[],"actions_1_year":[]}}]}}\nPROFILE:{json.dumps(compact_profile)}"""
+    if embedded_candidates:
+        candidates = embedded_candidates
+        profile = embedded_profile
+        if _needs_direct_recovery(profile, candidates, structured_evidence):
+            recovery_profile, recovery_candidates = await _recover_direct_candidates(
+                structured_evidence,
+                extracted_skills,
+                profile,
+                resilient_llm_generate,
+                max_careers,
+            )
+            if recovery_candidates:
+                profile = recovery_profile or profile
+                candidates = _merge_candidate_payloads(candidates, recovery_candidates, max_careers)
+        return _score_candidates(profile, candidates, scoring_evidence, structured_evidence, max_careers)
+
+    compact_profile = _compact_profile(structured_evidence, extracted_skills)
+    prompt = f"""Analyze this resume evidence for ANY profession. Return 3-{max_careers} evidence-supported careers. Prioritize the current profession and natural specialties/advancement paths. Do not invent credentials or experience. Return ONLY JSON: {{"profile":{{"primary_profession":"","professional_level":"","domain":"","specializations":[],"summary":""}},"careers":[{{"canonical_title":"","career_category":"","career_summary":"","candidate_relation":"current_profession|specialization|advancement|adjacent","candidate_confidence":0.0,"candidate_evidence":[],"regulated_role":false,"regulation_note":"","core_competencies":[],"competency_evidence_map":[{{"competency":"","evidence_keywords":[]}}],"domain_relevance_keywords":[],"recommended_subjects":[],"education_or_training_pathway":[],"credentials_or_licensing_areas":[],"experience_or_portfolio_evidence":[],"actions_30_days":[],"actions_6_months":[],"actions_1_year":[]}}]}}
+PROFILE:{json.dumps(compact_profile)}"""
     raw = await resilient_llm_generate(prompt, max_tokens_override=2600)
     payload = json.loads(raw)
-    return _score_candidates(
-        payload.get("profile") or {},
-        _safe_list(payload.get("careers")),
-        scoring_evidence,
-        structured_evidence,
-        max_careers,
-    )
+    profile = payload.get("profile") or embedded_profile or {}
+    candidates = _safe_list(payload.get("careers"))
+
+    if _needs_direct_recovery(profile, candidates, structured_evidence):
+        recovery_profile, recovery_candidates = await _recover_direct_candidates(
+            structured_evidence,
+            extracted_skills,
+            profile,
+            resilient_llm_generate,
+            max_careers,
+        )
+        if recovery_candidates:
+            profile = recovery_profile or profile
+            candidates = _merge_candidate_payloads(candidates, recovery_candidates, max_careers)
+
+    return _score_candidates(profile, candidates, scoring_evidence, structured_evidence, max_careers)
