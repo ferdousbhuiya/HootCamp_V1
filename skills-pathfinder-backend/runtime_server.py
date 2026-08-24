@@ -14,6 +14,7 @@ import recommendation_engine as recommendation_module
 from combined_resume_intelligence import install_combined_resume_intelligence
 from dynamic_career_discovery import discover_dynamic_careers, merge_recommendations
 from generic_market_resolution import install_generic_market_route
+from market_runtime_patch import install as install_market_runtime_patch
 from recommendation_cleanup import filter_existing_credentials
 from report_evidence_support import install_evidence_aware_report
 from server import resilient_llm_generate
@@ -22,6 +23,7 @@ from skill_quality import install_main_skill_patch
 install_main_skill_patch(main_module)
 install_combined_resume_intelligence(evidence_module, resilient_llm_generate)
 install_evidence_aware_report(app, resilient_llm_generate)
+install_market_runtime_patch()
 install_generic_market_route(app, resilient_llm_generate)
 
 
