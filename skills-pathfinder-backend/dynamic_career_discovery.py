@@ -205,11 +205,24 @@ def _sanitize_profile(raw: Any) -> Dict[str, Any]:
 
 
 def _candidate_is_direct(profile: Dict[str, Any], candidate: Dict[str, Any], structured_evidence: Dict[str, Any]) -> bool:
+    """Require evidence support as well as the AI relation label.
+
+    Relation labels are useful signals, but an incorrectly labelled unrelated career must
+    not suppress recovery of the documented current profession. This check therefore uses
+    title/profile/role/domain evidence and contains no occupation-specific rules.
+    """
     relation = _norm(candidate.get("candidate_relation") or "")
-    if relation in {"current profession", "current_profession", "specialization"}:
-        return True
     alignment = _occupational_alignment(_sanitize_profile(profile), candidate, structured_evidence)
-    return alignment["direct_role_or_profile"] >= 55.0 and alignment["domain_education_credential_project"] >= 35.0
+    direct = alignment["direct_role_or_profile"]
+    domain = alignment["domain_education_credential_project"]
+
+    if relation in {"current profession", "current_profession"}:
+        return direct >= 35.0 or domain >= 50.0
+    if relation == "specialization":
+        return (direct >= 35.0 and domain >= 45.0) or direct >= 60.0
+    if relation == "advancement":
+        return direct >= 55.0 and domain >= 45.0
+    return direct >= 60.0 and domain >= 40.0
 
 
 def _needs_direct_recovery(profile: Dict[str, Any], candidates: List[Dict[str, Any]], structured_evidence: Dict[str, Any]) -> bool:
@@ -222,8 +235,6 @@ def _needs_direct_recovery(profile: Dict[str, Any], candidates: List[Dict[str, A
 def _merge_candidate_payloads(primary: List[Dict[str, Any]], recovery: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
     merged: List[Dict[str, Any]] = []
     seen = set()
-    # Recovery candidates are placed first because this path only runs when direct
-    # profession coverage is missing or the original candidate set is incomplete.
     for item in list(recovery or []) + list(primary or []):
         if not isinstance(item, dict):
             continue
@@ -244,12 +255,7 @@ async def _recover_direct_candidates(
     resilient_llm_generate,
     max_careers: int,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """Small, targeted recovery call used only when direct-profession coverage is missing.
-
-    This is deliberately profession-neutral. It asks for the documented current profession
-    and same-domain paths, not a particular occupation. It also keeps the expensive second
-    call out of the normal path when the first extraction already produced good candidates.
-    """
+    """Small profession-neutral recovery call used only when direct coverage is missing."""
     compact_profile = _compact_profile(structured_evidence, extracted_skills)
     prompt = f"""The first career-candidate pass was incomplete. Recover the person's DIRECT current profession and up to two same-domain specialization/advancement paths from the resume evidence below.
 Do not suggest unrelated transferable-skill pivots in this recovery pass. Do not invent credentials, experience, or a profession not supported by job titles, education, credentials, projects, or the existing career profile.
