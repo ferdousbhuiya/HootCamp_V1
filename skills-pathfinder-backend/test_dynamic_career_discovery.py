@@ -178,6 +178,83 @@ class DynamicCareerDiscoveryTests(unittest.TestCase):
         self.assertLess(titles.index("Healthcare Administrator"), titles.index("Industrial Engineer"))
         self.assertGreater(results[titles.index("Healthcare Administrator")]["occupational_alignment_score"], results[titles.index("Industrial Engineer")]["occupational_alignment_score"])
 
+    def test_mislabeled_unrelated_specialization_still_triggers_recovery(self):
+        structured = {
+            "career_profile": {
+                "primary_profession": "Museum Collections Curator",
+                "professional_level": "mid-career",
+                "domain": "Museum Collections",
+                "specializations": ["Collections Preservation"],
+            },
+            "career_candidates": [
+                {
+                    "canonical_title": "Data Analyst",
+                    "career_category": "Analytics",
+                    "career_summary": "Analyzes business data and dashboards.",
+                    "candidate_relation": "specialization",
+                    "candidate_confidence": 0.82,
+                    "candidate_evidence": ["Spreadsheet reporting"],
+                    "core_competencies": ["Data Analysis", "Dashboards", "SQL"],
+                    "competency_evidence_map": [],
+                },
+                {
+                    "canonical_title": "Project Coordinator",
+                    "career_category": "Project Management",
+                    "career_summary": "Coordinates project activities.",
+                    "candidate_relation": "adjacent",
+                    "candidate_confidence": 0.65,
+                    "candidate_evidence": ["Exhibition projects"],
+                    "core_competencies": ["Scheduling", "Coordination", "Communication"],
+                    "competency_evidence_map": [],
+                },
+                {
+                    "canonical_title": "Operations Analyst",
+                    "career_category": "Operations",
+                    "career_summary": "Analyzes organizational operations.",
+                    "candidate_relation": "adjacent",
+                    "candidate_confidence": 0.60,
+                    "candidate_evidence": ["Inventory tracking"],
+                    "core_competencies": ["Workflow Analysis", "Reporting", "Problem Solving"],
+                    "competency_evidence_map": [],
+                },
+            ],
+            "education": [{"program_or_degree": "Master of Museum Studies", "field_of_study": "Museum Studies"}],
+            "experience": [{"role": "Museum Collections Curator", "skills_demonstrated": ["Collections Preservation", "Cataloging", "Exhibition Planning"]}],
+            "projects": [{"name": "Collections Preservation Initiative", "description": "Preserved and cataloged museum collections"}],
+        }
+        skills = [
+            {"name": "Collections Preservation", "confidence": 0.96},
+            {"name": "Cataloging", "confidence": 0.93},
+            {"name": "Exhibition Planning", "confidence": 0.90},
+        ]
+        calls = []
+
+        async def fake_llm(prompt, max_tokens_override=None):
+            calls.append(prompt)
+            return json.dumps({
+                "profile": structured["career_profile"],
+                "careers": [{
+                    "canonical_title": "Museum Collections Curator",
+                    "career_category": "Museum Collections",
+                    "career_summary": "Manages, preserves, catalogs, and interprets museum collections.",
+                    "candidate_relation": "current_profession",
+                    "candidate_confidence": 0.99,
+                    "candidate_evidence": ["Current role", "Museum Studies degree", "Collections Preservation"],
+                    "core_competencies": ["Collections Preservation", "Cataloging", "Exhibition Planning"],
+                    "competency_evidence_map": [
+                        {"competency": "Collections Preservation", "evidence_keywords": ["Collections Preservation"]},
+                        {"competency": "Cataloging", "evidence_keywords": ["Cataloging"]},
+                        {"competency": "Exhibition Planning", "evidence_keywords": ["Exhibition Planning"]},
+                    ],
+                    "domain_relevance_keywords": ["Museum Studies", "Museum Collections"],
+                }],
+            })
+
+        _, results = asyncio.run(discover_dynamic_careers(structured, skills, fake_llm, max_careers=6))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(results[0]["path"], "Museum Collections Curator")
+        self.assertGreater(results[0]["occupational_alignment_score"], 0.7)
+
     def test_recovery_failure_preserves_original_candidates(self):
         structured = {
             "career_profile": {"primary_profession": "Unknown Specialty", "domain": "General Operations"},
