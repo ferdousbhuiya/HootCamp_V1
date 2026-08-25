@@ -55,6 +55,62 @@ class RecommendationEngineTests(unittest.TestCase):
         self.assertIn("skill_gap_percentage", top)
         self.assertIn("matched_skill_details", top)
         self.assertIn("domain_evidence", top)
+        self.assertIn("readiness_level", top)
+        self.assertIn("competency_percentage", top)
+
+    def test_generic_transferable_skills_do_not_create_specialized_career(self):
+        evidence = {
+            "experience": [
+                {
+                    "role": "Office Manager",
+                    "start_date": "2020",
+                    "end_date": "Present",
+                    "responsibilities": ["Project management", "budget", "stakeholder collaboration"]
+                }
+            ]
+        }
+        recs = get_career_recommendations([
+            self.skill("Project Management"),
+            self.skill("Team Leadership"),
+            self.skill("Budget Management"),
+            self.skill("Stakeholder Collaboration"),
+            self.skill("Problem Solving"),
+        ], top_n=20, structured_evidence=evidence)
+        ids = {r["id"] for r in recs}
+        self.assertNotIn("electrical_engineer", ids)
+        self.assertNotIn("mechanical_engineer", ids)
+        self.assertNotIn("power_systems_engineer", ids)
+
+    def test_training_only_data_candidate_is_not_labeled_professional_ready(self):
+        evidence = {
+            "education": [{"program_or_degree": "BS", "field_of_study": "Data Analytics"}],
+            "projects": [{"title": "Analytics capstone", "description": "Python SQL Power BI data analysis dashboard"}],
+        }
+        recs = get_career_recommendations([
+            self.skill("Python"), self.skill("SQL"), self.skill("Power BI"),
+            self.skill("Tableau"), self.skill("Data Analytics"), self.skill("Advanced Excel")
+        ], top_n=10, structured_evidence=evidence)
+        data = next(r for r in recs if r["id"] == "data_analyst")
+        self.assertLessEqual(data["match_percentage"], 74.0)
+        self.assertIn(data["readiness_level"], {"transition_career", "future_upskilling"})
+
+    def test_relevant_experience_can_create_best_fit_now(self):
+        evidence = {
+            "education": [{"program_or_degree": "BS Electrical Engineering", "field_of_study": "Electrical Engineering"}],
+            "experience": [{
+                "role": "Electrical Engineer",
+                "start_date": "January 2021",
+                "end_date": "Present",
+                "responsibilities": ["Power distribution", "overhead lines", "AutoCAD", "HSE compliance", "troubleshooting"]
+            }]
+        }
+        recs = get_career_recommendations([
+            self.skill("Power Distribution"), self.skill("Overhead Lines"), self.skill("HSE Compliance"),
+            self.skill("Project Management"), self.skill("AutoCAD"), self.skill("Troubleshooting")
+        ], top_n=10, structured_evidence=evidence)
+        electrical = next(r for r in recs if r["id"] == "electrical_engineer")
+        self.assertEqual(electrical["readiness_level"], "best_fit_now")
+        self.assertGreaterEqual(electrical["match_percentage"], 68.0)
 
     def test_skill_gap_returns_percentages(self):
         analysis = get_skill_gap_analysis(
