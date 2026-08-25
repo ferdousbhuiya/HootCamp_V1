@@ -2,7 +2,7 @@
 
 This module deliberately leaves resume extraction untouched. It strengthens semantic
 competency matching, prevents cross-domain false positives, and adds conservative market
-title variants for common regulated/specialty titles observed during regression testing.
+title variants and explicit official occupation crosswalks for validated profession titles.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ ALIASES = {
     "litigation strategy": {"commercial litigation", "corporate litigation", "dispute resolution"},
     "settlement management": {"negotiation", "dispute resolution", "commercial litigation"},
     "trial advocacy": {"commercial litigation", "dispute resolution"},
-    "client counseling": {"patient relations", "negotiation"},
+    "client counseling": {"negotiation", "legal research and drafting"},
     "risk assessment": {"corporate compliance", "commercial litigation", "security operations oversight"},
     "contract negotiation": {"contract law", "negotiation"},
     "corporate governance": {"corporate compliance"},
@@ -53,11 +53,47 @@ MARKET_VARIANTS = {
     "in-house corporate counsel": ["Lawyers"],
     "general dentist": ["Dentists, General"],
     "senior general dentist": ["Dentists, General"],
+    "restorative dentist": ["Dentists, General"],
     "endodontist": ["Dentists, All Other Specialists"],
     "security officer": ["Security Guards"],
     "lead security officer": ["Security Guards"],
     "facility security specialist": ["Security Guards"],
-    "security operations manager": ["Security Managers"],
+}
+
+# These titles/codes are broad official occupation families. Specialty titles remain visible
+# in the UI, while wage/employment statistics are explicitly labeled with the broader mapped
+# occupation rather than being presented as specialty-specific data.
+EXPLICIT_BLS_MAPPINGS = {
+    "corporate litigation attorney": "Lawyers",
+    "litigation partner": "Lawyers",
+    "in house corporate counsel": "Lawyers",
+    "general dentist": "Dentists, General",
+    "senior general dentist": "Dentists, General",
+    "restorative dentist": "Dentists, General",
+    "endodontist": "Dentists, All Other Specialists",
+    "security officer": "Security Guards",
+    "lead security officer": "Security Guards",
+    "facility security specialist": "Security Guards",
+}
+
+EXPLICIT_ONET_MAPPINGS = {
+    "corporate litigation attorney": "Lawyers",
+    "litigation partner": "Lawyers",
+    "in house corporate counsel": "Lawyers",
+    "general dentist": "Dentists, General",
+    "senior general dentist": "Dentists, General",
+    "restorative dentist": "Dentists, General",
+    "endodontist": "Dentists, All Other Specialists",
+    "security officer": "Security Guards",
+    "lead security officer": "Security Guards",
+    "facility security specialist": "Security Guards",
+}
+
+EXPLICIT_BLS_CODES = {
+    "Lawyers": "231011",
+    "Dentists, General": "291021",
+    "Dentists, All Other Specialists": "291029",
+    "Security Guards": "339032",
 }
 
 
@@ -90,7 +126,6 @@ def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
             return direct
         wanted = norm(keyword)
         candidates = set(ALIASES.get(wanted, set()))
-        # reverse aliases allow extracted specific terms to satisfy broader competencies
         for canonical, synonyms in ALIASES.items():
             if wanted in synonyms:
                 candidates.add(canonical)
@@ -115,8 +150,6 @@ def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
         return best
 
     blueprint_module._find_keyword = improved
-    # dynamic_career_discovery imported score_blueprint by value; score_blueprint resolves
-    # _find_keyword from blueprint_module at runtime, so keeping both references explicit is safe.
     discovery_module.score_blueprint = blueprint_module.score_blueprint
 
 
@@ -140,7 +173,6 @@ def filter_cross_domain(current_title: str, recommendations: Iterable[Dict[str, 
         if relation == "current_profession" or not domain or domain == current_domain:
             filtered.append(row)
             continue
-        # Adjacent moves may cross domains only with strong occupational evidence.
         score = float(row.get("match_score") or 0)
         matched = len(row.get("matched_skills") or [])
         if relation == "adjacent" and score >= 0.60 and matched >= 4:
@@ -159,6 +191,11 @@ def current_title(profile: Dict[str, Any], structured: Dict[str, Any]) -> str:
 
 
 def install_market_variants_patch(generic_market_module) -> None:
+    """Install deterministic broad-official occupation mappings before market lookup.
+
+    The generic resolver already validates O*NET/SOC data. These mappings simply give it
+    known broad occupation families for specialty titles that otherwise fail exact lookup.
+    """
     original = generic_market_module._market_title_variants
 
     def variants(title: str):
@@ -171,13 +208,18 @@ def install_market_variants_patch(generic_market_module) -> None:
 
     generic_market_module._market_title_variants = variants
 
+    market = generic_market_module.market
+    for career, mapped_title in EXPLICIT_BLS_MAPPINGS.items():
+        market.CAREER_TO_BLS_TITLE[market._normalize(career)] = mapped_title
+    for career, mapped_title in EXPLICIT_ONET_MAPPINGS.items():
+        market.CAREER_TO_ONET_TITLE[market._normalize(career)] = mapped_title
+    market.BLS_TITLE_TO_OCCUPATION_CODE.update(EXPLICIT_BLS_CODES)
+
 
 def normalize_education(structured: Dict[str, Any]) -> Dict[str, Any]:
     """Preserve non-degree formal education instead of treating it as absent."""
     structured = dict(structured or {})
     education = list(structured.get("education") or [])
-    # Some extractors place a diploma in credentials/certifications. Promote only explicit
-    # school diplomas, never professional certifications.
     if not education:
         for item in structured.get("certifications") or []:
             if not isinstance(item, dict):
