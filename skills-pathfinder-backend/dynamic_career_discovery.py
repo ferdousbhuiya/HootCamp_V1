@@ -25,12 +25,7 @@ def _norm(value: Any) -> str:
 
 
 def _relation_priority(value: Any) -> int:
-    """Keep professional identity separate from readiness scoring.
-
-    Match score answers how ready the person is for a path. It must not be allowed to
-    redefine the person's established profession merely because an adjacent career has
-    a shorter competency list or more transferable-skill overlap.
-    """
+    """Keep professional identity separate from readiness scoring."""
     return {
         "current_profession": 4,
         "specialization": 3,
@@ -57,6 +52,149 @@ def _compact(items: Any, fields: Iterable[str], limit: int = 20) -> List[Dict[st
         if row:
             rows.append(row)
     return rows
+
+
+def _title_tokens(value: Any) -> set[str]:
+    stop = {
+        "senior", "junior", "lead", "principal", "associate", "assistant", "staff",
+        "grade", "grades", "level", "the", "and", "of", "for", "in", "with",
+    }
+    return {
+        token for token in _norm(value).replace("/", " ").replace(".", " ").split()
+        if len(token) > 2 and token not in stop and not token.isdigit()
+    }
+
+
+def _titles_overlap(left: Any, right: Any) -> bool:
+    a, b = _norm(left), _norm(right)
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+    ta, tb = _title_tokens(a), _title_tokens(b)
+    if not ta or not tb:
+        return False
+    overlap = len(ta & tb) / max(1, min(len(ta), len(tb)))
+    return overlap >= 0.60
+
+
+def _current_profession_title(profile: Dict[str, Any], structured_evidence: Dict[str, Any]) -> str:
+    primary = str((profile or {}).get("primary_profession") or "").strip()
+    if primary:
+        return primary
+    for item in _safe_list((structured_evidence or {}).get("experience")):
+        if isinstance(item, dict) and str(item.get("role") or "").strip():
+            return str(item.get("role")).strip()
+    return ""
+
+
+def _ensure_current_profession_candidate(
+    profile: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    structured_evidence: Dict[str, Any],
+    extracted_skills: List[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Guarantee one evidence-grounded current-profession candidate.
+
+    Groq occasionally returns only specializations/adjacent careers even when the resume
+    clearly establishes a current occupation. Rather than inventing a profession from
+    transferable skills, anchor the current profession to career_profile.primary_profession
+    or the most recent parsed work role. If a matching candidate already exists, promote
+    that candidate to current_profession. Otherwise synthesize a minimal blueprint using
+    only resume-backed skills and work evidence.
+    """
+    profile = dict(profile or {})
+    rows = [dict(item) for item in (candidates or []) if isinstance(item, dict)]
+    anchor = _current_profession_title(profile, structured_evidence)
+    if not anchor:
+        return profile, rows
+
+    profile.setdefault("primary_profession", anchor)
+
+    matching_index = None
+    for index, row in enumerate(rows):
+        if _titles_overlap(row.get("canonical_title"), anchor):
+            matching_index = index
+            break
+
+    if matching_index is not None:
+        for index, row in enumerate(rows):
+            if index == matching_index:
+                row["candidate_relation"] = "current_profession"
+                try:
+                    row["candidate_confidence"] = max(float(row.get("candidate_confidence") or 0), 0.95)
+                except (TypeError, ValueError):
+                    row["candidate_confidence"] = 0.95
+            elif _norm(row.get("candidate_relation")).replace(" ", "_") == "current_profession":
+                row["candidate_relation"] = "specialization"
+        return profile, rows
+
+    for row in rows:
+        if _norm(row.get("candidate_relation")).replace(" ", "_") == "current_profession":
+            row["candidate_relation"] = "specialization"
+
+    competency_names: List[str] = []
+    seen = set()
+
+    def add_competency(value: Any) -> None:
+        clean = str(value or "").strip()
+        key = _norm(clean)
+        if not clean or not key or key in seen:
+            return
+        seen.add(key)
+        competency_names.append(clean)
+
+    for skill in extracted_skills or []:
+        if isinstance(skill, dict):
+            add_competency(skill.get("name") or skill.get("skill_name"))
+        elif isinstance(skill, str):
+            add_competency(skill)
+        if len(competency_names) >= 8:
+            break
+
+    evidence_lines: List[str] = []
+    for item in _safe_list((structured_evidence or {}).get("experience")):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        if role and not evidence_lines:
+            evidence_lines.append(f"Current/recent role: {role}")
+        for label in _safe_list(item.get("skills_demonstrated")):
+            add_competency(label)
+        for responsibility in _safe_list(item.get("responsibilities"))[:2]:
+            text = str(responsibility or "").strip()
+            if text:
+                evidence_lines.append(text)
+        if evidence_lines:
+            break
+
+    if not competency_names:
+        competency_names = [anchor]
+
+    domain = str(profile.get("domain") or "").strip() or "Current Profession"
+    current_candidate = {
+        "canonical_title": anchor,
+        "career_category": domain,
+        "career_summary": f"Current profession established by the resume's documented work history: {anchor}.",
+        "candidate_relation": "current_profession",
+        "candidate_confidence": 0.98,
+        "candidate_evidence": evidence_lines[:6] or [f"Resume documents the role {anchor}."],
+        "regulated_role": False,
+        "regulation_note": "",
+        "core_competencies": competency_names[:8],
+        "competency_evidence_map": [
+            {"competency": name, "evidence_keywords": [name]} for name in competency_names[:8]
+        ],
+        "domain_relevance_keywords": [domain, anchor],
+        "recommended_subjects": [],
+        "education_or_training_pathway": [],
+        "credentials_or_licensing_areas": [],
+        "experience_or_portfolio_evidence": evidence_lines[:6],
+        "actions_30_days": ["Document recent measurable accomplishments and keep profession-specific evidence current."],
+        "actions_6_months": ["Strengthen advanced evidence, professional development and leadership appropriate to the current profession."],
+        "actions_1_year": ["Reassess advancement and specialization opportunities using updated experience and market evidence."],
+    }
+    return profile, [current_candidate, *rows]
 
 
 def build_scoring_evidence(structured_evidence: Dict[str, Any], extracted_skills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -175,7 +313,10 @@ async def discover_dynamic_careers(structured_evidence: Dict[str, Any], extracte
 
     embedded_candidates = _safe_list(structured_evidence.get("career_candidates"))
     if embedded_candidates:
-        return _score_candidates(structured_evidence.get("career_profile") or {}, embedded_candidates, scoring_evidence, max_careers)
+        profile, candidates = _ensure_current_profession_candidate(
+            structured_evidence.get("career_profile") or {}, embedded_candidates, structured_evidence, extracted_skills
+        )
+        return _score_candidates(profile, candidates, scoring_evidence, max_careers)
 
     compact_profile = {
         "skills": [{"name": x.get("name"), "category": x.get("category")} for x in (extracted_skills or [])[:80] if isinstance(x, dict) and x.get("name")],
@@ -190,4 +331,7 @@ First establish the person's documented current profession from the most recent/
 Return ONLY JSON: {{"profile":{{"primary_profession":"","professional_level":"","domain":"","specializations":[],"summary":""}},"careers":[{{"canonical_title":"","career_category":"","career_summary":"","candidate_relation":"current_profession|specialization|advancement|adjacent","candidate_confidence":0.0,"candidate_evidence":[],"regulated_role":false,"regulation_note":"","core_competencies":[],"competency_evidence_map":[{{"competency":"","evidence_keywords":[]}}],"domain_relevance_keywords":[],"recommended_subjects":[],"education_or_training_pathway":[],"credentials_or_licensing_areas":[],"experience_or_portfolio_evidence":[],"actions_30_days":[],"actions_6_months":[],"actions_1_year":[]}}]}}\nPROFILE:{json.dumps(compact_profile)}"""
     raw = await resilient_llm_generate(prompt, max_tokens_override=2600)
     payload = json.loads(raw)
-    return _score_candidates(payload.get("profile") or {}, _safe_list(payload.get("careers")), scoring_evidence, max_careers)
+    profile, candidates = _ensure_current_profession_candidate(
+        payload.get("profile") or {}, _safe_list(payload.get("careers")), structured_evidence, extracted_skills
+    )
+    return _score_candidates(profile, candidates, scoring_evidence, max_careers)
