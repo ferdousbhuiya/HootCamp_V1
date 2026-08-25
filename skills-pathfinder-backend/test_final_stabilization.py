@@ -6,6 +6,7 @@ from final_stabilization import (
     install_market_variants_patch,
     install_semantic_match_patch,
 )
+from recommendation_cleanup import credentials_equivalent
 
 
 def setup_module():
@@ -54,3 +55,19 @@ def test_market_variants_include_broad_official_family():
     assert "Lawyers" in generic_market._market_title_variants("Corporate Litigation Attorney")
     assert "Dentists, General" in generic_market._market_title_variants("General Dentist")
     assert "Security Guards" in generic_market._market_title_variants("Security Officer")
+
+
+def test_explicit_market_mappings_are_installed():
+    market = generic_market.market
+    assert market.CAREER_TO_BLS_TITLE[market._normalize("General Dentist")] == "Dentists, General"
+    assert market.CAREER_TO_BLS_TITLE[market._normalize("Corporate Litigation Attorney")] == "Lawyers"
+    assert market.CAREER_TO_BLS_TITLE[market._normalize("Security Officer")] == "Security Guards"
+    assert market.BLS_TITLE_TO_OCCUPATION_CODE["Dentists, General"] == "291021"
+    assert market.BLS_TITLE_TO_OCCUPATION_CODE["Lawyers"] == "231011"
+    assert market.BLS_TITLE_TO_OCCUPATION_CODE["Security Guards"] == "339032"
+
+
+def test_bls_cpr_equivalent_wording_is_not_recommended_twice():
+    held = "Basic Life Support (BLS) & CPR Certified"
+    suggested = "BLS & CPR Certification"
+    assert credentials_equivalent(held, suggested)
