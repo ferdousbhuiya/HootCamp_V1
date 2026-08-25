@@ -18,34 +18,70 @@ from fastapi import Query
 import market_intelligence as market
 
 
+_GENERIC_ROLE_WORDS = {
+    "analyst", "administrator", "advisor", "associate", "assistant", "consultant",
+    "coordinator", "developer", "designer", "director", "engineer", "lead", "manager",
+    "officer", "professional", "senior", "specialist", "supervisor", "technician",
+}
+
+
 def _soc_to_bls_code(soc: Optional[str]) -> Optional[str]:
     text = str(soc or "").split(".", 1)[0]
     digits = re.sub(r"\D", "", text)
     return digits if len(digits) == 6 else None
 
 
+def _stem_token(token: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "", token.lower())
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 4 and token.endswith("es"):
+        return token[:-2]
+    if len(token) > 3 and token.endswith("s"):
+        return token[:-1]
+    return token
+
+
 def _title_tokens(value: str) -> set[str]:
-    tokens = []
-    for token in market._normalize(value).split():
-        if len(token) <= 2:
-            continue
-        if len(token) > 4 and token.endswith("ies"):
-            token = token[:-3] + "y"
-        elif len(token) > 4 and token.endswith("es"):
-            token = token[:-2]
-        elif len(token) > 3 and token.endswith("s"):
-            token = token[:-1]
-        tokens.append(token)
-    return set(tokens)
+    return {
+        _stem_token(token)
+        for token in market._normalize(value).split()
+        if len(_stem_token(token)) >= 3
+    }
+
+
+def _informative_tokens(value: str) -> set[str]:
+    role_words = {_stem_token(token) for token in _GENERIC_ROLE_WORDS}
+    return {token for token in _title_tokens(value) if token not in role_words}
+
+
+def _market_title_variants(career_title: str) -> list[str]:
+    """Generate conservative textual variants without profession-specific aliases."""
+    original = str(career_title or "").strip()
+    if not original:
+        return []
+    variants = [original]
+    no_parens = re.sub(r"\([^)]*\)", " ", original)
+    no_parens = re.sub(r"\s+", " ", no_parens).strip(" -/,")
+    if no_parens and market._normalize(no_parens) != market._normalize(original):
+        variants.append(no_parens)
+    if "/" in no_parens:
+        for part in no_parens.split("/"):
+            clean = part.strip()
+            if clean:
+                variants.append(clean)
+    seen = set()
+    output = []
+    for item in variants:
+        key = market._normalize(item)
+        if key and key not in seen:
+            seen.add(key)
+            output.append(item)
+    return output
 
 
 def _best_bls_html_record(occupation_title: str) -> Optional[Dict[str, Any]]:
-    """Find the published OEWS row matching an O*NET occupation title.
-
-    O*NET and OEWS labels are frequently nearly identical but not byte-for-byte equal.
-    Matching is conservative: exact normalized title wins; otherwise a high token overlap
-    and string-similarity threshold is required.
-    """
+    """Find the published OEWS row matching an O*NET occupation title."""
     try:
         records = market._bls_records()
     except Exception:
@@ -80,7 +116,6 @@ def _best_bls_html_record(occupation_title: str) -> Optional[Dict[str, Any]]:
 def _bls_html_fallback_for_soc(code: str, occupation_title: str) -> Optional[Dict[str, Any]]:
     record = _best_bls_html_record(occupation_title)
     if not record:
-        # Preserve support for known explicit mappings when the O*NET/BLS labels differ.
         known_title = next((title for title, known_code in market.BLS_TITLE_TO_OCCUPATION_CODE.items() if known_code == code), None)
         if known_title:
             try:
@@ -141,7 +176,10 @@ def _bls_from_soc(soc: str, occupation_title: str) -> Optional[Dict[str, Any]]:
                         "retrieval_method": "bls_public_api",
                         "source": market.BLS_SOURCE_NAME,
                         "source_period": f"May {wage.get('year') or emp.get('year')}" if (wage.get("year") or emp.get("year")) else market.BLS_OEWS_PERIOD,
-                        "source_url": market.BLS_API_URL,
+                        # Show users the human-readable OEWS source, while retaining the
+                        # public API endpoint as retrieval metadata.
+                        "source_url": market.BLS_OEWS_URL,
+                        "retrieval_url": market.BLS_API_URL,
                     }
     except Exception:
         pass
@@ -163,63 +201,78 @@ def _crosswalk_result(requested_title: str, onet: Dict[str, Any], bls: Dict[str,
 
 
 def _direct_onet_soc_resolution(career_title: str) -> Optional[Dict[str, Any]]:
-    try:
-        onet = market.lookup_onet_occupation(career_title)
-    except Exception:
-        return None
-    if not onet.get("available") or not onet.get("base_soc_code"):
-        return None
-    bls = _bls_from_soc(onet["base_soc_code"], onet.get("occupation_title") or career_title)
-    if not bls:
-        return None
-    return _crosswalk_result(career_title, onet, bls, {
-        "method": "direct_onet_to_bls_soc",
-        "requested_title": career_title,
-        "resolved_title": onet.get("occupation_title"),
-        "validated_soc": onet.get("base_soc_code"),
-    })
-
-
-def _stem_token(token: str) -> str:
-    token = re.sub(r"[^a-z0-9]+", "", token.lower())
-    if len(token) > 4 and token.endswith("ies"):
-        return token[:-3] + "y"
-    if len(token) > 4 and token.endswith("es"):
-        return token[:-2]
-    if len(token) > 3 and token.endswith("s"):
-        return token[:-1]
-    return token
+    for variant in _market_title_variants(career_title):
+        try:
+            onet = market.lookup_onet_occupation(variant)
+        except Exception:
+            continue
+        if not onet.get("available") or not onet.get("base_soc_code"):
+            continue
+        bls = _bls_from_soc(onet["base_soc_code"], onet.get("occupation_title") or variant)
+        if not bls:
+            continue
+        return _crosswalk_result(career_title, onet, bls, {
+            "method": "direct_onet_to_bls_soc",
+            "requested_title": career_title,
+            "query_variant": variant,
+            "resolved_title": onet.get("occupation_title"),
+            "validated_soc": onet.get("base_soc_code"),
+        })
+    return None
 
 
 def _lexical_onet_family_resolution(career_title: str) -> Optional[Dict[str, Any]]:
+    """Resolve specialty titles through informative title/domain words.
+
+    Generic role words such as designer, specialist, manager or developer are treated as
+    weak signals. Domain words such as instructional, healthcare, electrical, legal or
+    curriculum carry more weight. This remains profession-neutral and avoids a title alias
+    table for every career.
+    """
     try:
         rows = market._onet_rows()
     except Exception:
         return None
-    requested_norm = market._normalize(career_title)
-    requested_tokens = {_stem_token(t) for t in requested_norm.split() if len(_stem_token(t)) >= 3}
-    if not requested_tokens:
-        return None
 
     ranked = []
-    for row in rows:
-        title = str(row.get("title") or "")
-        description = str(row.get("description") or "")
-        title_norm = market._normalize(title)
-        title_tokens = {_stem_token(t) for t in title_norm.split() if len(_stem_token(t)) >= 3}
-        description_tokens = {_stem_token(t) for t in market._normalize(description).split() if len(_stem_token(t)) >= 3}
-        title_overlap = len(requested_tokens & title_tokens)
-        context_overlap = len(requested_tokens & description_tokens)
-        if title_overlap == 0 and context_overlap == 0:
+    for variant in _market_title_variants(career_title):
+        requested_norm = market._normalize(variant)
+        requested_tokens = _title_tokens(variant)
+        requested_info = _informative_tokens(variant)
+        if not requested_tokens:
             continue
-        similarity = SequenceMatcher(None, requested_norm, title_norm).ratio()
-        score = (3.0 * title_overlap) + (0.8 * context_overlap) + similarity
-        ranked.append((score, row))
 
-    for _, row in sorted(ranked, key=lambda item: item[0], reverse=True)[:12]:
+        for row in rows:
+            title = str(row.get("title") or "")
+            description = str(row.get("description") or "")
+            title_norm = market._normalize(title)
+            title_tokens = _title_tokens(title)
+            title_info = _informative_tokens(title)
+            description_tokens = _title_tokens(description)
+
+            all_title_overlap = len(requested_tokens & title_tokens)
+            informative_title_overlap = len(requested_info & title_info)
+            informative_context_overlap = len(requested_info & description_tokens)
+            similarity = SequenceMatcher(None, requested_norm, title_norm).ratio()
+
+            # Require at least one meaningful signal before a row can compete.
+            if informative_title_overlap == 0 and informative_context_overlap == 0 and all_title_overlap < 2 and similarity < 0.60:
+                continue
+
+            score = (
+                5.0 * informative_title_overlap
+                + 1.4 * informative_context_overlap
+                + 1.6 * all_title_overlap
+                + 1.2 * similarity
+            )
+            ranked.append((score, row, variant))
+
+    seen_soc = set()
+    for _, row, variant in sorted(ranked, key=lambda item: item[0], reverse=True)[:30]:
         base_soc = market._onet_base_soc(row.get("onetsoc_code"))
-        if not base_soc:
+        if not base_soc or base_soc in seen_soc:
             continue
+        seen_soc.add(base_soc)
         bls = _bls_from_soc(base_soc, row.get("title") or career_title)
         if not bls:
             continue
@@ -230,7 +283,7 @@ def _lexical_onet_family_resolution(career_title: str) -> Optional[Dict[str, Any
             "occupation_title": row.get("title"),
             "description": row.get("description"),
             "match_score": None,
-            "mapping_method": "lexical_title_description_family",
+            "mapping_method": "lexical_domain_family",
             "source": market.ONET_SOURCE_NAME,
             "source_release": market.ONET_RELEASE,
             "source_url": market.ONET_OCCUPATION_DATA_URL,
@@ -238,6 +291,7 @@ def _lexical_onet_family_resolution(career_title: str) -> Optional[Dict[str, Any
         return _crosswalk_result(career_title, onet, bls, {
             "method": "lexical_onet_family_validated_by_bls",
             "requested_title": career_title,
+            "query_variant": variant,
             "resolved_title": row.get("title"),
             "validated_soc": base_soc,
         })
@@ -291,13 +345,14 @@ def _safe_existing_market(career_title: str) -> Dict[str, Any]:
 
 
 async def _generic_resolution(career_title: str, resilient_llm_generate) -> Optional[Dict[str, Any]]:
+    # Prefer deterministic, source-backed resolution before spending an AI request.
     resolved = _direct_onet_soc_resolution(career_title)
     if resolved:
         return resolved
-    resolved = await _ai_family_resolution(career_title, resilient_llm_generate)
+    resolved = _lexical_onet_family_resolution(career_title)
     if resolved:
         return resolved
-    return _lexical_onet_family_resolution(career_title)
+    return await _ai_family_resolution(career_title, resilient_llm_generate)
 
 
 def install_generic_market_route(app, resilient_llm_generate):
@@ -305,6 +360,9 @@ def install_generic_market_route(app, resilient_llm_generate):
         direct = _safe_existing_market(career_title)
         if (direct.get("bls") or {}).get("available"):
             direct["title_resolution"] = {"method": "existing_confirmed_mapping", "requested_title": career_title}
+            # Keep human-facing source links readable even when the record came from API retrieval.
+            if isinstance(direct.get("bls"), dict):
+                direct["bls"].setdefault("source_url", market.BLS_OEWS_URL)
             return {"status": "success", "market_data": direct}
 
         resolved = await _generic_resolution(career_title, resilient_llm_generate)
