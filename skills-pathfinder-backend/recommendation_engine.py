@@ -39,6 +39,13 @@ SKILL_ALIASES={
     "underground cable":"underground cabling","fusion360":"fusion 360"
 }
 
+# Transferable skills are useful, but they must not dominate a specialized career score.
+TRANSFERABLE_SKILLS={
+    "project management","team leadership","budget management","stakeholder collaboration",
+    "presentation","problem solving","microsoft excel","advanced excel","excel",
+    "risk management","workflow analysis","process improvement"
+}
+
 STRUCTURED_SKILL_TERMS={
     "project management":["project management","project plan","project coordination","progress meetings","deliverables"],
     "team leadership":["supervised a team","led a ","managed a ","team of four","executive board","delegating roles"],
@@ -159,6 +166,20 @@ def _relevant_years(experience,terms):
             if m==13: y+=1; m=1
     return round(len(months)/12.,1)
 
+def _evidence_hits(records,terms):
+    return [x for x in records if isinstance(x,dict) and _contains_domain(_record_text(x),terms)]
+
+def _skill_weight(required_skill):
+    return .55 if _normalize_text(required_skill) in TRANSFERABLE_SKILLS else 1.0
+
+def _career_readiness_level(score,years,education_hits,project_hits,internship_hits,certification_hits):
+    strong_training=bool(education_hits and (project_hits or internship_hits or certification_hits))
+    if score>=.68 and (years>=1.0 or (score>=.75 and strong_training)):
+        return "best_fit_now"
+    if score>=.45:
+        return "transition_career"
+    return "future_upskilling"
+
 def calculate_match_score(extracted_skills,required_skills,skill_weights=None):
     if not required_skills: return 0.,[],[]
     index=_build_skill_index(extracted_skills); matched=[]; missing=[]
@@ -169,54 +190,121 @@ def calculate_match_score(extracted_skills,required_skills,skill_weights=None):
 
 def _score_career(extracted_skills,career,structured_evidence=None):
     evidence=structured_evidence or {}; index=_build_skill_index(extracted_skills); required=career.get("required_skills") or []
-    matched=[]; missing=[]; details=[]; earned=0.
+    matched=[]; missing=[]; details=[]; earned=0.; possible=0.
     for req in required:
+        weight=_skill_weight(req); possible+=weight
         e=_match_required(req,index) or _match_structured(req,evidence)
         if e:
-            matched.append(req); earned+=(.65+.35*e["confidence"])
-            details.append({"required_skill":req,"evidence_skill":e["name"],"confidence":round(e["confidence"],3),"source":e["source"],"weight":1,"type":"core_competency"})
+            matched.append(req)
+            contribution=weight*(.60+.40*e["confidence"])
+            earned+=contribution
+            details.append({"required_skill":req,"evidence_skill":e["name"],"confidence":round(e["confidence"],3),"source":e["source"],"weight":weight,"type":"transferable" if weight<1 else "domain_or_technical"})
         else: missing.append(req)
-    core=earned/len(required) if required else 0.
+    competency=earned/possible if possible else 0.
+
     all_text=_all_structured_text(evidence)
     gate_terms=career.get("domain_gate") or career.get("domain_terms") or []
     gate_ok=_contains_domain(all_text,gate_terms)
     terms=career.get("domain_terms") or []
-    education=safe_list(evidence.get("education")); experience=safe_list(evidence.get("experience")); projects=safe_list(evidence.get("projects") or evidence.get("project_accomplishments")); publications=safe_list(evidence.get("publications"))
-    education_hits=[x for x in education if isinstance(x,dict) and _contains_domain(_record_text(x),terms)]
-    project_hits=[x for x in projects if isinstance(x,dict) and _contains_domain(_record_text(x),terms)]
-    publication_hits=[x for x in publications if isinstance(x,dict) and _contains_domain(_record_text(x),terms)]
+    education=safe_list(evidence.get("education")); experience=safe_list(evidence.get("experience"))
+    projects=safe_list(evidence.get("projects"))+safe_list(evidence.get("project_accomplishments"))
+    publications=safe_list(evidence.get("publications")); certifications=safe_list(evidence.get("certifications")); courses=safe_list(evidence.get("courses"))
+    education_hits=_evidence_hits(education,terms)
+    project_hits=_evidence_hits(projects,terms)
+    publication_hits=_evidence_hits(publications,terms)
+    certification_hits=_evidence_hits(certifications,terms)
+    course_hits=_evidence_hits(courses,terms)
     internship_hits=[x for x in experience if isinstance(x,dict) and not _is_professional_role(x) and _contains_domain(_record_text(x),terms)]
     years=_relevant_years(experience,terms)
-    has_professional_domain=bool(years or project_hits or publication_hits)
-    has_training_domain=bool(education_hits or internship_hits)
-    if not gate_ok:
+
+    professional_strength=min(1.0,years/5.0)
+    education_strength=1.0 if education_hits else 0.
+    project_strength=min(1.0,len(project_hits)/2.0)
+    internship_strength=1.0 if internship_hits else 0.
+    certification_strength=min(1.0,(len(certification_hits)+len(course_hits))/2.0)
+    publication_strength=1.0 if publication_hits else 0.
+    domain_strength=(
+        .42*professional_strength+
+        .18*education_strength+
+        .16*project_strength+
+        .10*internship_strength+
+        .08*certification_strength+
+        .06*publication_strength
+    )
+
+    has_professional_domain=bool(years)
+    has_training_domain=bool(education_hits or internship_hits or certification_hits or course_hits)
+    has_substantive_domain=bool(has_professional_domain or has_training_domain or project_hits or publication_hits)
+
+    if not gate_ok or not has_substantive_domain:
         score=0.
     else:
-        education_credit=.08 if education_hits else 0.; experience_credit=min(.20,years/10*.20) if years else 0.
-        project_credit=min(.06,len(project_hits)*.02); publication_credit=min(.04,len(publication_hits)*.04); internship_credit=.05 if internship_hits else 0.
-        score=min(1.,core*.68+education_credit+experience_credit+project_credit+publication_credit+internship_credit)
-        if not years and (has_training_domain or project_hits): score=min(score,.80)
+        score=.55*competency+.45*domain_strength
+        # Academic/project evidence can support a transition recommendation, but should
+        # not look equivalent to established professional readiness.
+        if not years and has_training_domain:
+            score=min(score,.74)
+        elif years<1.0:
+            score=min(score,.80)
+        # A career supported only by transferable competencies should remain modest.
+        technical_matches=sum(1 for d in details if d["type"]=="domain_or_technical")
+        if technical_matches==0:
+            score=min(score,.48)
+        score=min(1.,score)
+
     score=round(score,4); pct=round(score*100,1)
-    reason=f"Demonstrates {len(matched)} of {len(required)} mapped core competencies"
-    if years: reason+=f" with {years:g} years of career-relevant professional experience."
-    elif internship_hits and (education_hits or project_hits): reason+=" with relevant academic, project, and internship evidence but no detected full-time professional experience in this career domain."
-    elif has_training_domain or project_hits: reason+=" with relevant academic, project, or transferable evidence but no detected full-time professional experience in this career domain."
-    else: reason+="."
-    return {"match_score":score,"match_percentage":pct,"skill_gap_percentage":round((1-score)*100,1),"matched_skills":matched,"missing_skills":missing,"matched_skill_details":details,"domain_evidence":{"education_records":len(education_hits),"relevant_experience_years":years,"internship_records":len(internship_hits),"project_records":len(project_hits),"publication_records":len(publication_hits),"professional_domain_evidence":has_professional_domain,"training_domain_evidence":has_training_domain,"domain_gate_passed":gate_ok},"domain_relevance_percentage":round((.08 if education_hits else 0)+min(.20,years/10*.20)+min(.06,len(project_hits)*.02)+min(.04,len(publication_hits)*.04)+(.05 if internship_hits else 0),2)*100,"match_reason":reason,"career_relevant_experience_years":years}
+    readiness=_career_readiness_level(score,years,education_hits,project_hits,internship_hits,certification_hits)
+    reason=f"Matches {len(matched)} of {len(required)} mapped competencies"
+    if years:
+        reason+=f" and has {years:g} years of career-relevant professional experience."
+    elif education_hits and project_hits:
+        reason+=" with relevant education and project evidence, but no detected full-time professional experience in this career domain."
+    elif has_training_domain:
+        reason+=" with relevant education, internship, certification, or course evidence, but limited professional evidence in this career domain."
+    else:
+        reason+=" with limited direct domain evidence."
+
+    return {
+        "match_score":score,
+        "match_percentage":pct,
+        "skill_gap_percentage":round((1-score)*100,1),
+        "readiness_level":readiness,
+        "matched_skills":matched,
+        "missing_skills":missing,
+        "matched_skill_details":details,
+        "domain_evidence":{
+            "education_records":len(education_hits),
+            "relevant_experience_years":years,
+            "internship_records":len(internship_hits),
+            "project_records":len(project_hits),
+            "publication_records":len(publication_hits),
+            "certification_records":len(certification_hits),
+            "course_records":len(course_hits),
+            "professional_domain_evidence":has_professional_domain,
+            "training_domain_evidence":has_training_domain,
+            "domain_gate_passed":gate_ok
+        },
+        "domain_relevance_percentage":round(domain_strength*100,1),
+        "competency_percentage":round(competency*100,1),
+        "match_reason":reason,
+        "career_relevant_experience_years":years
+    }
 
 def _career_result(career,scoring):
     return {"id":career["id"],"path":career["path"],"category":career["category"],**scoring,"job_outlook":career.get("job_outlook"),"median_salary":career.get("median_salary"),"top_locations":career.get("top_locations") or []}
 
 def get_career_recommendations(extracted_skills,top_n=5,structured_evidence=None):
     out=[]
+    readiness_rank={"best_fit_now":3,"transition_career":2,"future_upskilling":1}
     for career in CAREER_PATHS:
         scoring=_score_career(extracted_skills,career,structured_evidence)
-        if scoring["match_score"]>=.30: out.append(_career_result(career,scoring))
-    out.sort(key=lambda x:(x["match_score"],x.get("career_relevant_experience_years",0),len(x["matched_skills"])),reverse=True)
+        if scoring["match_score"]>=.25: out.append(_career_result(career,scoring))
+    out.sort(key=lambda x:(readiness_rank.get(x.get("readiness_level"),0),x["match_score"],x.get("career_relevant_experience_years",0),len(x["matched_skills"])),reverse=True)
     return out[:max(1,int(top_n or 5))]
 
 def get_skill_gap_analysis(extracted_skills,target_career_id,structured_evidence=None):
     target=next((c for c in CAREER_PATHS if c["id"]==target_career_id),None)
     if not target: return None
     scoring=_score_career(extracted_skills,target,structured_evidence)
-    return {"career_id":target["id"],"career":target["path"],**scoring,"priority_missing_skills":scoring["missing_skills"][:3]}
+    weighted_missing=sorted(scoring["missing_skills"],key=lambda s:_skill_weight(s),reverse=True)
+    return {"career_id":target["id"],"career":target["path"],**scoring,"priority_missing_skills":weighted_missing[:3]}
