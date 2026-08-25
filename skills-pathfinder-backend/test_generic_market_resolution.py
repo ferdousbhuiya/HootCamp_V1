@@ -1,10 +1,10 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import generic_market_resolution as resolver
 
 
-class GenericMarketResolutionTests(unittest.TestCase):
+class GenericMarketResolutionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.rows = [
             {
@@ -21,6 +21,11 @@ class GenericMarketResolutionTests(unittest.TestCase):
                 "title": "Middle School Teachers, Except Special and Career/Technical Education",
                 "description": "Teach students in public or private middle schools in one or more subjects.",
                 "onetsoc_code": "25-2022.00",
+            },
+            {
+                "title": "Special Education Teachers, Middle School",
+                "description": "Teach middle school students with disabilities and special education needs.",
+                "onetsoc_code": "25-2057.00",
             },
         ]
 
@@ -45,7 +50,7 @@ class GenericMarketResolutionTests(unittest.TestCase):
         self.assertEqual(result["onet"]["occupation_title"], "Instructional Coordinators")
         self.assertEqual(result["title_resolution"]["validated_soc"], "25-9031")
 
-    def test_middle_school_math_teacher_maps_to_middle_school_teacher_family(self):
+    def test_middle_school_math_teacher_maps_to_general_teacher_family(self):
         with patch.object(resolver.market, "_onet_rows", return_value=self.rows), patch.object(
             resolver, "_bls_from_soc", side_effect=self.fake_bls
         ):
@@ -56,6 +61,28 @@ class GenericMarketResolutionTests(unittest.TestCase):
             "Middle School Teachers, Except Special and Career/Technical Education",
         )
         self.assertEqual(result["title_resolution"]["validated_soc"], "25-2022")
+
+    async def test_generic_resolution_prefers_domain_lexical_match_over_fuzzy_specialty(self):
+        wrong_fuzzy = {
+            "available": True,
+            "base_soc_code": "25-2057",
+            "onet_soc_code": "25-2057.00",
+            "occupation_title": "Special Education Teachers, Middle School",
+            "mapping_method": "title_similarity",
+            "match_score": 0.74,
+        }
+        with patch.object(resolver.market, "_onet_rows", return_value=self.rows), patch.object(
+            resolver.market, "lookup_onet_occupation", return_value=wrong_fuzzy
+        ) as direct_lookup, patch.object(
+            resolver, "_bls_from_soc", side_effect=self.fake_bls
+        ):
+            result = await resolver._generic_resolution("Middle School Math Teacher", AsyncMock())
+        self.assertEqual(
+            result["onet"]["occupation_title"],
+            "Middle School Teachers, Except Special and Career/Technical Education",
+        )
+        self.assertEqual(result["title_resolution"]["validated_soc"], "25-2022")
+        direct_lookup.assert_not_called()
 
     def test_parenthetical_specialty_generates_clean_variant(self):
         variants = resolver._market_title_variants("Instructional Designer (EdTech)")
