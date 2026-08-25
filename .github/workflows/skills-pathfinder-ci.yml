@@ -28,9 +28,9 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r requirements.txt
       - name: Compile backend modules
-        run: python -m py_compile main.py server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py market_intelligence.py dynamic_career_discovery.py combined_resume_intelligence.py
+        run: python -m py_compile main.py server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py market_intelligence.py generic_market_resolution.py dynamic_career_discovery.py combined_resume_intelligence.py
       - name: Run backend unit tests
-        run: python -m unittest -v test_recommendation_engine.py test_certificate_verification.py test_extended_catalog.py test_market_intelligence.py test_dynamic_career_discovery.py
+        run: python -m unittest -v test_recommendation_engine.py test_certificate_verification.py test_extended_catalog.py test_market_intelligence.py test_generic_market_resolution.py test_dynamic_career_discovery.py
       - name: Import production FastAPI application
         env:
           GROQ_API_KEY: ''
