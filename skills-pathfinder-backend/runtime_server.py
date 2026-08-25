@@ -11,6 +11,9 @@ import evidence_server as evidence_module
 from evidence_server import app, enhanced_upload
 import main as main_module
 import recommendation_engine as recommendation_module
+import career_blueprint_service as blueprint_module
+import dynamic_career_discovery as discovery_module
+import generic_market_resolution as generic_market_module
 from combined_resume_intelligence import install_combined_resume_intelligence
 from dynamic_career_discovery import discover_dynamic_careers, merge_recommendations
 from generic_market_resolution import install_generic_market_route
@@ -19,8 +22,17 @@ from recommendation_cleanup import filter_existing_credentials
 from report_evidence_support import install_evidence_aware_report
 from robust_json_llm import robust_resilient_llm_generate as resilient_llm_generate
 from skill_quality import install_main_skill_patch
+from final_stabilization import (
+    current_title,
+    filter_cross_domain,
+    install_market_variants_patch,
+    install_semantic_match_patch,
+    normalize_education,
+)
 
 install_main_skill_patch(main_module)
+install_semantic_match_patch(blueprint_module, discovery_module)
+install_market_variants_patch(generic_market_module)
 install_combined_resume_intelligence(evidence_module, resilient_llm_generate)
 install_evidence_aware_report(app, resilient_llm_generate)
 install_market_runtime_patch()
@@ -37,7 +49,8 @@ async def structured_resume_upload(file: UploadFile = File(...)):
     """
     result = await enhanced_upload(file)
     skills = result.get("extracted_skills") or []
-    structured = result.get("structured_evidence") or {}
+    structured = normalize_education(result.get("structured_evidence") or {})
+    result["structured_evidence"] = structured
 
     catalog_results = recommendation_module.get_career_recommendations(
         skills,
@@ -55,6 +68,7 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         result["career_profile"] = career_profile
         result["dynamic_career_discovery"] = bool(dynamic_results)
         merged = merge_recommendations(dynamic_results, catalog_results, top_n=8)
+        merged = filter_cross_domain(current_title(career_profile, structured), merged)
         result["recommendations"] = filter_existing_credentials(structured, merged)
         if not result["recommendations"]:
             result["career_discovery_warning"] = "No evidence-supported career recommendations were produced."
@@ -63,7 +77,8 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         result["career_profile"] = structured.get("career_profile") or {}
         result["dynamic_career_discovery"] = False
         result["dynamic_career_discovery_error"] = str(exc)
-        result["recommendations"] = filter_existing_credentials(structured, catalog_results)
+        fallback = filter_cross_domain(current_title(result["career_profile"], structured), catalog_results)
+        result["recommendations"] = filter_existing_credentials(structured, fallback)
 
     return result
 
