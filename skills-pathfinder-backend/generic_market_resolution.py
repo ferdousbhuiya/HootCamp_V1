@@ -176,8 +176,6 @@ def _bls_from_soc(soc: str, occupation_title: str) -> Optional[Dict[str, Any]]:
                         "retrieval_method": "bls_public_api",
                         "source": market.BLS_SOURCE_NAME,
                         "source_period": f"May {wage.get('year') or emp.get('year')}" if (wage.get("year") or emp.get("year")) else market.BLS_OEWS_PERIOD,
-                        # Show users the human-readable OEWS source, while retaining the
-                        # public API endpoint as retrieval metadata.
                         "source_url": market.BLS_OEWS_URL,
                         "retrieval_url": market.BLS_API_URL,
                     }
@@ -255,7 +253,6 @@ def _lexical_onet_family_resolution(career_title: str) -> Optional[Dict[str, Any
             informative_context_overlap = len(requested_info & description_tokens)
             similarity = SequenceMatcher(None, requested_norm, title_norm).ratio()
 
-            # Require at least one meaningful signal before a row can compete.
             if informative_title_overlap == 0 and informative_context_overlap == 0 and all_title_overlap < 2 and similarity < 0.60:
                 continue
 
@@ -345,11 +342,13 @@ def _safe_existing_market(career_title: str) -> Dict[str, Any]:
 
 
 async def _generic_resolution(career_title: str, resilient_llm_generate) -> Optional[Dict[str, Any]]:
-    # Prefer deterministic, source-backed resolution before spending an AI request.
-    resolved = _direct_onet_soc_resolution(career_title)
+    # The lexical resolver uses domain/title evidence and is safer than a raw fuzzy-title
+    # guess. Prefer it first so a general occupation is not silently replaced by a nearby
+    # specialty occupation merely because the strings are similar.
+    resolved = _lexical_onet_family_resolution(career_title)
     if resolved:
         return resolved
-    resolved = _lexical_onet_family_resolution(career_title)
+    resolved = _direct_onet_soc_resolution(career_title)
     if resolved:
         return resolved
     return await _ai_family_resolution(career_title, resilient_llm_generate)
@@ -360,7 +359,6 @@ def install_generic_market_route(app, resilient_llm_generate):
         direct = _safe_existing_market(career_title)
         if (direct.get("bls") or {}).get("available"):
             direct["title_resolution"] = {"method": "existing_confirmed_mapping", "requested_title": career_title}
-            # Keep human-facing source links readable even when the record came from API retrieval.
             if isinstance(direct.get("bls"), dict):
                 direct["bls"].setdefault("source_url", market.BLS_OEWS_URL)
             return {"status": "success", "market_data": direct}
