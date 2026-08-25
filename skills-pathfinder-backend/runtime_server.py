@@ -14,6 +14,7 @@ import recommendation_engine as recommendation_module
 import career_blueprint_service as blueprint_module
 import dynamic_career_discovery as discovery_module
 import generic_market_resolution as generic_market_module
+import market_intelligence as market_module
 from combined_resume_intelligence import install_combined_resume_intelligence
 from dynamic_career_discovery import discover_dynamic_careers, merge_recommendations
 from generic_market_resolution import install_generic_market_route
@@ -29,6 +30,7 @@ from final_stabilization import (
     install_semantic_match_patch,
     normalize_education,
 )
+from final_demo_stability import install_bls_table_fallback, stabilize_current_profession
 
 install_main_skill_patch(main_module)
 install_semantic_match_patch(blueprint_module, discovery_module)
@@ -36,6 +38,7 @@ install_market_variants_patch(generic_market_module)
 install_combined_resume_intelligence(evidence_module, resilient_llm_generate)
 install_evidence_aware_report(app, resilient_llm_generate)
 install_market_runtime_patch()
+install_bls_table_fallback(market_module)
 install_generic_market_route(app, resilient_llm_generate)
 
 
@@ -69,6 +72,7 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         result["dynamic_career_discovery"] = bool(dynamic_results)
         merged = merge_recommendations(dynamic_results, catalog_results, top_n=8)
         merged = filter_cross_domain(current_title(career_profile, structured), merged)
+        merged = stabilize_current_profession(career_profile, structured, merged)
         result["recommendations"] = filter_existing_credentials(structured, merged)
         if not result["recommendations"]:
             result["career_discovery_warning"] = "No evidence-supported career recommendations were produced."
@@ -78,6 +82,7 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         result["dynamic_career_discovery"] = False
         result["dynamic_career_discovery_error"] = str(exc)
         fallback = filter_cross_domain(current_title(result["career_profile"], structured), catalog_results)
+        fallback = stabilize_current_profession(result["career_profile"], structured, fallback)
         result["recommendations"] = filter_existing_credentials(structured, fallback)
 
     return result
