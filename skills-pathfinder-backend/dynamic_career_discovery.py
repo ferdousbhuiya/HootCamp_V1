@@ -24,6 +24,30 @@ def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip(" .-/")
 
 
+def _relation_priority(value: Any) -> int:
+    """Keep professional identity separate from readiness scoring.
+
+    Match score answers how ready the person is for a path. It must not be allowed to
+    redefine the person's established profession merely because an adjacent career has
+    a shorter competency list or more transferable-skill overlap.
+    """
+    return {
+        "current_profession": 4,
+        "specialization": 3,
+        "advancement": 2,
+        "adjacent": 1,
+    }.get(_norm(value).replace(" ", "_"), 0)
+
+
+def _recommendation_sort_key(item: Dict[str, Any]) -> tuple:
+    return (
+        _relation_priority(item.get("candidate_relation")),
+        float(item.get("discovery_confidence") or 0),
+        float(item.get("match_score") or 0),
+        len(item.get("matched_skills") or []),
+    )
+
+
 def _compact(items: Any, fields: Iterable[str], limit: int = 20) -> List[Dict[str, Any]]:
     rows = []
     for item in _safe_list(items)[:limit]:
@@ -109,7 +133,7 @@ def merge_recommendations(dynamic_results: List[Dict[str, Any]], catalog_results
             if key not in merged or rank_value > merged[key][0]:
                 merged[key] = (rank_value, row)
     rows = [value[1] for value in merged.values()]
-    rows.sort(key=lambda x: (float(x.get("match_score") or 0), float(x.get("discovery_confidence") or 0), len(x.get("matched_skills") or [])), reverse=True)
+    rows.sort(key=_recommendation_sort_key, reverse=True)
     return rows[:max(1, int(top_n or 8))]
 
 
@@ -140,7 +164,7 @@ def _score_candidates(profile: Dict[str, Any], candidates: List[Dict[str, Any]],
         recommendation["dynamic_blueprint"] = True
         recommendation["career_blueprint"] = blueprint
         results.append(recommendation)
-    results.sort(key=lambda x: (float(x.get("match_score") or 0), float(x.get("discovery_confidence") or 0)), reverse=True)
+    results.sort(key=_recommendation_sort_key, reverse=True)
     return _sanitize_profile(profile), results
 
 
@@ -149,8 +173,6 @@ async def discover_dynamic_careers(structured_evidence: Dict[str, Any], extracte
     structured_evidence = structured_evidence or {}
     scoring_evidence = build_scoring_evidence(structured_evidence, extracted_skills)
 
-    # Preferred path: evidence extraction already asked Groq for profession-neutral
-    # career candidates. This avoids a second large request immediately after upload.
     embedded_candidates = _safe_list(structured_evidence.get("career_candidates"))
     if embedded_candidates:
         return _score_candidates(structured_evidence.get("career_profile") or {}, embedded_candidates, scoring_evidence, max_careers)
@@ -163,7 +185,9 @@ async def discover_dynamic_careers(structured_evidence: Dict[str, Any], extracte
         "projects": _compact(structured_evidence.get("projects"), ["name", "description", "skills_demonstrated"], 10),
         "total_experience_years": structured_evidence.get("total_experience_years"),
     }
-    prompt = f"""Analyze this resume evidence for ANY profession. Return 3-{max_careers} evidence-supported careers. Prioritize the current profession and natural specialties/advancement paths. Do not invent credentials or experience. Return ONLY JSON: {{"profile":{{"primary_profession":"","professional_level":"","domain":"","specializations":[],"summary":""}},"careers":[{{"canonical_title":"","career_category":"","career_summary":"","candidate_relation":"current_profession|specialization|advancement|adjacent","candidate_confidence":0.0,"candidate_evidence":[],"regulated_role":false,"regulation_note":"","core_competencies":[],"competency_evidence_map":[{{"competency":"","evidence_keywords":[]}}],"domain_relevance_keywords":[],"recommended_subjects":[],"education_or_training_pathway":[],"credentials_or_licensing_areas":[],"experience_or_portfolio_evidence":[],"actions_30_days":[],"actions_6_months":[],"actions_1_year":[]}}]}}\nPROFILE:{json.dumps(compact_profile)}"""
+    prompt = f"""Analyze this resume evidence for ANY profession. Return 3-{max_careers} evidence-supported careers.
+First establish the person's documented current profession from the most recent/relevant role, sustained work history, education and professional credentials. Include EXACTLY ONE current_profession candidate representing that established occupation. Do not relabel a person by a narrower skill specialty unless the resume's role itself establishes that specialty. Then include natural specialization, advancement and adjacent paths. Readiness will be scored separately and must not determine professional identity. Do not invent credentials or experience.
+Return ONLY JSON: {{"profile":{{"primary_profession":"","professional_level":"","domain":"","specializations":[],"summary":""}},"careers":[{{"canonical_title":"","career_category":"","career_summary":"","candidate_relation":"current_profession|specialization|advancement|adjacent","candidate_confidence":0.0,"candidate_evidence":[],"regulated_role":false,"regulation_note":"","core_competencies":[],"competency_evidence_map":[{{"competency":"","evidence_keywords":[]}}],"domain_relevance_keywords":[],"recommended_subjects":[],"education_or_training_pathway":[],"credentials_or_licensing_areas":[],"experience_or_portfolio_evidence":[],"actions_30_days":[],"actions_6_months":[],"actions_1_year":[]}}]}}\nPROFILE:{json.dumps(compact_profile)}"""
     raw = await resilient_llm_generate(prompt, max_tokens_override=2600)
     payload = json.loads(raw)
     return _score_candidates(payload.get("profile") or {}, _safe_list(payload.get("careers")), scoring_evidence, max_careers)
