@@ -1,11 +1,10 @@
 """Generic market-title resolution for dynamically discovered careers.
 
-Specialty job titles often do not exist as separate OEWS occupations. This layer first
-uses O*NET to resolve a detailed occupation and then uses its base SOC for BLS/OEWS wage
-and employment data. If a specialty title is too colloquial for direct O*NET matching,
-a small Groq call supplies only an occupational-family hint; the hint is then validated
-against O*NET before any BLS figures are returned. A lexical O*NET fallback keeps the
-service useful even when the AI helper is rate-limited or temporarily unavailable.
+Specialty titles are resolved to an O*NET occupation first, then to the validated base
+SOC used for BLS/OEWS data. When the public BLS API is unavailable, the published OEWS
+table is matched generically by occupation title instead of relying on a small hard-coded
+career list. Groq may suggest an occupation-family title, but every result is validated by
+O*NET before any BLS wage or employment figure is returned.
 """
 from __future__ import annotations
 
@@ -25,30 +24,86 @@ def _soc_to_bls_code(soc: Optional[str]) -> Optional[str]:
     return digits if len(digits) == 6 else None
 
 
-def _bls_html_fallback_for_code(code: str, occupation_title: str) -> Optional[Dict[str, Any]]:
-    """Use the published OEWS table when the public API is temporarily unavailable."""
+def _title_tokens(value: str) -> set[str]:
+    tokens = []
+    for token in market._normalize(value).split():
+        if len(token) <= 2:
+            continue
+        if len(token) > 4 and token.endswith("ies"):
+            token = token[:-3] + "y"
+        elif len(token) > 4 and token.endswith("es"):
+            token = token[:-2]
+        elif len(token) > 3 and token.endswith("s"):
+            token = token[:-1]
+        tokens.append(token)
+    return set(tokens)
+
+
+def _best_bls_html_record(occupation_title: str) -> Optional[Dict[str, Any]]:
+    """Find the published OEWS row matching an O*NET occupation title.
+
+    O*NET and OEWS labels are frequently nearly identical but not byte-for-byte equal.
+    Matching is conservative: exact normalized title wins; otherwise a high token overlap
+    and string-similarity threshold is required.
+    """
     try:
-        known_title = next((title for title, known_code in market.BLS_TITLE_TO_OCCUPATION_CODE.items() if known_code == code), None)
-        if not known_title:
-            return None
-        record = market._bls_records().get(market._normalize(known_title))
-        if not record:
-            return None
-        return {
-            "available": True,
-            **record,
-            "occupation_title": known_title,
-            "occupation_code": code,
-            "soc_code": market._soc_from_bls_code(code),
-            "mapped_occupation": known_title,
-            "mapping_method": "onet_validated_soc_family",
-            "retrieval_method": "bls_html_fallback",
-            "source": market.BLS_SOURCE_NAME,
-            "source_period": market.BLS_OEWS_PERIOD,
-            "source_url": market.BLS_OEWS_URL,
-        }
+        records = market._bls_records()
     except Exception:
         return None
+    if not records:
+        return None
+
+    wanted_norm = market._normalize(occupation_title)
+    exact = records.get(wanted_norm)
+    if exact:
+        return exact
+
+    wanted_tokens = _title_tokens(occupation_title)
+    if not wanted_tokens:
+        return None
+
+    best = None
+    best_score = 0.0
+    for row in records.values():
+        row_title = str(row.get("occupation_title") or "")
+        row_tokens = _title_tokens(row_title)
+        if not row_tokens:
+            continue
+        overlap = len(wanted_tokens & row_tokens) / max(1, len(wanted_tokens | row_tokens))
+        similarity = SequenceMatcher(None, wanted_norm, market._normalize(row_title)).ratio()
+        score = 0.72 * overlap + 0.28 * similarity
+        if overlap >= 0.55 and similarity >= 0.58 and score > best_score:
+            best, best_score = row, score
+    return best
+
+
+def _bls_html_fallback_for_soc(code: str, occupation_title: str) -> Optional[Dict[str, Any]]:
+    record = _best_bls_html_record(occupation_title)
+    if not record:
+        # Preserve support for known explicit mappings when the O*NET/BLS labels differ.
+        known_title = next((title for title, known_code in market.BLS_TITLE_TO_OCCUPATION_CODE.items() if known_code == code), None)
+        if known_title:
+            try:
+                record = market._bls_records().get(market._normalize(known_title))
+            except Exception:
+                record = None
+    if not record:
+        return None
+
+    mapped_title = record.get("occupation_title") or occupation_title
+    return {
+        "available": True,
+        **record,
+        "occupation_title": mapped_title,
+        "occupation_code": code,
+        "soc_code": market._soc_from_bls_code(code),
+        "mapped_occupation": mapped_title,
+        "mapping_method": "onet_validated_soc_family",
+        "retrieval_method": "bls_html_title_family_fallback",
+        "source": market.BLS_SOURCE_NAME,
+        "source_period": market.BLS_OEWS_PERIOD,
+        "source_url": market.BLS_OEWS_URL,
+    }
 
 
 def _bls_from_soc(soc: str, occupation_title: str) -> Optional[Dict[str, Any]]:
@@ -90,8 +145,7 @@ def _bls_from_soc(soc: str, occupation_title: str) -> Optional[Dict[str, Any]]:
                     }
     except Exception:
         pass
-
-    return _bls_html_fallback_for_code(code, occupation_title)
+    return _bls_html_fallback_for_soc(code, occupation_title)
 
 
 def _crosswalk_result(requested_title: str, onet: Dict[str, Any], bls: Dict[str, Any], resolution: Dict[str, Any]) -> Dict[str, Any]:
@@ -138,7 +192,6 @@ def _stem_token(token: str) -> str:
 
 
 def _lexical_onet_family_resolution(career_title: str) -> Optional[Dict[str, Any]]:
-    """Profession-neutral fallback using O*NET titles/descriptions plus validated SOC data."""
     try:
         rows = market._onet_rows()
     except Exception:
@@ -241,13 +294,9 @@ async def _generic_resolution(career_title: str, resilient_llm_generate) -> Opti
     resolved = _direct_onet_soc_resolution(career_title)
     if resolved:
         return resolved
-
     resolved = await _ai_family_resolution(career_title, resilient_llm_generate)
     if resolved:
         return resolved
-
-    # AI may be rate-limited. O*NET itself can still resolve many specialty titles by
-    # title/description evidence and validate the resulting SOC before BLS data is shown.
     return _lexical_onet_family_resolution(career_title)
 
 
