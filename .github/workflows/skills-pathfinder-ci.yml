@@ -28,10 +28,10 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r requirements.txt
       - name: Compile backend modules
-        run: python -m py_compile main.py server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py market_intelligence.py generic_market_resolution.py dynamic_career_discovery.py combined_resume_intelligence.py
+        run: python -m py_compile main.py server.py runtime_server.py evidence_server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py market_intelligence.py generic_market_resolution.py dynamic_career_discovery.py combined_resume_intelligence.py recommendation_cleanup.py report_evidence_support.py robust_json_llm.py skill_quality.py market_runtime_patch.py
       - name: Run backend unit tests
         run: python -m unittest -v test_recommendation_engine.py test_certificate_verification.py test_extended_catalog.py test_market_intelligence.py test_generic_market_resolution.py test_dynamic_career_discovery.py
-      - name: Import production FastAPI application
+      - name: Import actual production FastAPI application
         env:
           GROQ_API_KEY: ''
           SUPABASE_URL: ''
@@ -39,18 +39,19 @@ jobs:
           TESSERACT_CMD: tesseract
         run: |
           python - <<'PY'
-          import server
-          assert server.app.title == 'Skills Pathfinder API'
-          paths = {route.path for route in server.app.routes}
+          import runtime_server
+          app = runtime_server.app
+          assert app.title == 'Skills Pathfinder API'
+          paths = {route.path for route in app.routes}
           required = {
-              '/', '/health', '/api/upload', '/api/recommendations',
-              '/api/verify-certificate', '/api/verify-certificate-link',
-              '/api/generate-career-advice', '/api/career-advisor',
-              '/api/market-data'
+              '/', '/health', '/api/upload', '/api/resume-evidence',
+              '/api/recommendations', '/api/verify-certificate',
+              '/api/verify-certificate-link', '/api/generate-career-advice',
+              '/api/career-advisor', '/api/market-data'
           }
           missing = required - paths
           assert not missing, f'Missing API routes: {sorted(missing)}'
-          print('FastAPI production app imported successfully')
+          print('Actual Docker production app imported successfully')
           print('Validated routes:', ', '.join(sorted(required)))
           PY
 
