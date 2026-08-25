@@ -46,12 +46,41 @@ function CareerRecommendationsV2({skills,user,onBack}){
     if(!selectedRec)return[];
     const title=selectedRec.path||selectedRec.career_title||'career';
     const out=[];
-    const onet=selectedMarket?.onet||{};const bls=selectedMarket?.bls||{};
-    if(onet.onet_soc_code) out.push({name:`O*NET: ${onet.occupation_title||title}`,purpose:'Occupation tasks, skills, knowledge and related titles for the mapped occupation.',url:`https://www.onetonline.org/link/summary/${encodeURIComponent(onet.onet_soc_code)}`,type:'Official occupation source'});
-    else out.push({name:`Search O*NET for ${title}`,purpose:'Find the closest official O*NET occupation profile for this career title.',url:`https://www.onetonline.org/find/quick?s=${encodeURIComponent(title)}`,type:'Official occupation source'});
-    if(bls.source_url) out.push({name:`BLS/OEWS: ${bls.mapped_occupation||bls.occupation_title||title}`,purpose:`Official wage and employment source${bls.source_period?` (${bls.source_period})`:''}.`,url:bls.source_url,type:'Official market source'});
-    for(const c of recommendedCredentials){const obj=typeof c==='string'?{name:c}:c;if(obj?.url)out.push({name:obj.name||'Credential resource',purpose:'Official or provider-supplied credential information.',url:obj.url,type:'Credential resource'});}
-    return out;
+    const onet=selectedMarket?.onet||{};
+    const bls=selectedMarket?.bls||{};
+
+    if(onet.onet_soc_code){
+      out.push({
+        name:`O*NET occupation profile: ${onet.occupation_title||title}`,
+        purpose:'Official occupation tasks, knowledge, skills and related titles for the mapped O*NET occupation.',
+        url:`https://www.onetonline.org/link/summary/${encodeURIComponent(onet.onet_soc_code)}`,
+        type:'Official occupation source'
+      });
+    }else{
+      out.push({
+        name:`Search O*NET for ${title}`,
+        purpose:'Search the official O*NET occupation database when a confirmed occupation mapping is not yet available.',
+        url:`https://www.onetonline.org/find/quick?s=${encodeURIComponent(title)}`,
+        type:'Official occupation search'
+      });
+    }
+
+    if(bls.available&&bls.source_url){
+      out.push({
+        name:`BLS/OEWS: ${bls.mapped_occupation||bls.occupation_title||title}`,
+        purpose:`Official wage and employment source${bls.source_period?` (${bls.source_period})`:''} for the confirmed occupation mapping.`,
+        url:bls.source_url,
+        type:'Official market source'
+      });
+    }
+
+    for(const c of recommendedCredentials){
+      const obj=typeof c==='string'?{name:c}:c;
+      if(obj?.url)out.push({name:obj.name||'Credential resource',purpose:'Official or provider-supplied credential information.',url:obj.url,type:'Credential resource'});
+    }
+
+    const seen=new Set();
+    return out.filter(item=>{const key=String(item.url||'').trim();if(!key||seen.has(key))return false;seen.add(key);return true;});
   },[selectedRec,selectedMarket,recommendedCredentials]);
 
   if(loading)return <div className="app-card p-8 text-center">Building Career Intelligence from your resume evidence…</div>;
@@ -59,7 +88,7 @@ function CareerRecommendationsV2({skills,user,onBack}){
   if(!best)return <div className="app-card p-8 text-center">No evidence-supported career paths were produced.</div>;
 
   return <div className="space-y-6">
-    <section className="rounded-3xl bg-slate-950 p-6 text-white sm:p-8"><p className="text-xs font-bold uppercase tracking-[.18em] text-teal-300">Career Intelligence</p><div className="mt-2 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><h2 className="text-3xl font-black">Best current fit: {best.path}</h2><p className="mt-2 max-w-3xl text-sm text-slate-300">Professional identity is preserved first; readiness scores compare fit within current, specialization, advancement and adjacent paths.</p></div><button onClick={onBack} className="rounded-xl border border-white/20 px-4 py-2">Back</button></div></section>
+    <section className="rounded-3xl bg-slate-950 p-6 text-white sm:p-8"><p className="text-xs font-bold uppercase tracking-[.18em] text-teal-300">Career Intelligence</p><div className="mt-2 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><h2 className="text-3xl font-black">{relationLabel(best)==='Current profession'?`Current profession: ${best.path}`:`Best current fit: ${best.path}`}</h2><p className="mt-2 max-w-3xl text-sm text-slate-300">Professional identity is preserved first; readiness scores compare fit within current, specialization, advancement and adjacent paths.</p></div><button onClick={onBack} className="rounded-xl border border-white/20 px-4 py-2">Back</button></div></section>
 
     <section className="grid gap-4 lg:grid-cols-4"><div className="app-card p-5 lg:col-span-2"><p className="text-xs font-bold uppercase text-indigo-600">{relationLabel(best)}</p><h3 className="mt-2 text-2xl font-black">{best.path}</h3><p className="mt-2 text-sm text-slate-600">{best.match_reason}</p></div><div className="app-card p-5"><p className="text-xs uppercase text-slate-400">Readiness</p><p className="mt-2 text-4xl font-black text-indigo-700">{pct(best)}%</p></div><div className="app-card p-5"><p className="text-xs uppercase text-slate-400">Annual wage</p><p className="mt-2 text-2xl font-black">{salaryFor(best)||'Not available'}</p><p className="mt-1 text-xs text-slate-500">{salaryFor(best)?'Confirmed BLS/OEWS mapping':'No confirmed official market mapping yet'}</p></div></section>
 
@@ -69,11 +98,11 @@ function CareerRecommendationsV2({skills,user,onBack}){
 
     {selectedRec&&<section className="app-card overflow-hidden"><div className="border-b p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase text-indigo-600">Career details</p><h3 className="text-2xl font-black">{selectedRec.path}</h3></div><div className="flex flex-wrap gap-2">{['overview','market','certifications','degrees','roadmap','resources'].map(t=><button key={t} onClick={()=>setTab(t)} className={`rounded-xl px-3 py-2 text-sm font-semibold ${tab===t?'bg-slate-950 text-white':'bg-slate-100 text-slate-700'}`}>{t}</button>)}</div></div></div><div className="p-6">
       {tab==='overview'&&<div><h4 className="font-bold">Why this career fits</h4><p className="mt-2 text-sm text-slate-600">{bp.career_summary||selectedRec.match_reason}</p>{safe(selectedRec.missing_skills).length>0&&<div className="mt-6"><h4 className="font-bold">Priority development areas</h4><div className="mt-3 grid gap-3 md:grid-cols-2">{safe(selectedRec.missing_skills).map(g=><div key={g} className="rounded-xl border p-4"><b>Strengthen {g}</b><p className="mt-1 text-sm text-slate-600">Build recent, profession-appropriate evidence for this competency.</p></div>)}</div></div>}</div>}
-      {tab==='market'&&<div>{selectedMarket?.bls?.available?<div className="grid gap-4 md:grid-cols-2"><div className="rounded-xl border p-5"><p className="text-xs uppercase text-slate-400">Annual wage</p><p className="mt-2 text-3xl font-black">{money(selectedMarket.bls.mean_annual_wage)}</p></div><div className="rounded-xl border p-5"><p className="text-xs uppercase text-slate-400">National employment</p><p className="mt-2 text-3xl font-black">{num(selectedMarket.bls.employment)}</p></div><div className="md:col-span-2 rounded-xl bg-slate-50 p-5"><b>{selectedMarket.bls.mapped_occupation||selectedMarket.bls.occupation_title}</b><p className="mt-2 text-sm text-slate-600">Mapped through {selectedMarket?.title_resolution?.method||selectedMarket.bls.mapping_method||'validated occupation mapping'}.</p></div></div>:<p className="text-sm text-slate-600">No confirmed BLS/OEWS mapping is available yet for this specialty title. The app will not invent salary or employment figures.</p>}</div>}
+      {tab==='market'&&<div>{selectedMarket?.bls?.available?<div className="grid gap-4 md:grid-cols-2"><div className="rounded-xl border p-5"><p className="text-xs uppercase text-slate-400">Annual wage</p><p className="mt-2 text-3xl font-black">{money(selectedMarket.bls.mean_annual_wage)}</p></div><div className="rounded-xl border p-5"><p className="text-xs uppercase text-slate-400">National employment</p><p className="mt-2 text-3xl font-black">{num(selectedMarket.bls.employment)}</p></div><div className="md:col-span-2 rounded-xl bg-slate-50 p-5"><p className="text-xs font-bold uppercase text-slate-400">Official occupation used for market statistics</p><b>{selectedMarket.bls.mapped_occupation||selectedMarket.bls.occupation_title}</b>{selectedMarket?.onet?.occupation_title&&<p className="mt-1 text-sm text-slate-600">O*NET occupation: {selectedMarket.onet.occupation_title}</p>}<p className="mt-2 text-sm text-slate-600">Mapped through {selectedMarket?.title_resolution?.method||selectedMarket.bls.mapping_method||'validated occupation mapping'}. Specialty titles may use a broader official SOC occupation for wage and employment statistics.</p></div></div>:<div><p className="text-sm text-slate-600">No confirmed BLS/OEWS mapping is available yet for this specialty title. The app will not invent salary or employment figures.</p>{selectedMarket?.onet?.available&&<div className="mt-4 rounded-xl bg-slate-50 p-4"><p className="text-xs font-bold uppercase text-slate-400">Closest confirmed O*NET occupation</p><b>{selectedMarket.onet.occupation_title}</b><p className="mt-1 text-sm text-slate-600">Official occupation detail is available even though a wage/employment crosswalk was not confirmed.</p></div>}</div>}</div>}
       {tab==='certifications'&&<div><h4 className="font-bold">Credentials already evidenced</h4><div className="mt-3 space-y-2">{existingCredentials.length?existingCredentials.map((c,i)=><div key={i} className="rounded-xl border p-4"><b>{typeof c==='string'?c:c?.name}</b><p className="text-xs text-slate-500">Resume evidence, not independent verification</p></div>):<p className="text-sm text-slate-500">No resume credential detected.</p>}</div><h4 className="mt-6 font-bold">Recommended credentials</h4><div className="mt-3 space-y-2">{recommendedCredentials.length?recommendedCredentials.map((c,i)=><div key={i} className="rounded-xl border p-4"><b>{typeof c==='string'?c:c?.name}</b>{typeof c!=='string'&&c?.provider&&<p className="text-sm text-slate-600">{c.provider}</p>}</div>):<p className="text-sm text-slate-500">No additional credential is currently suggested.</p>}</div></div>}
       {tab==='degrees'&&<div><h4 className="font-bold">Degree guidance</h4><p className="mt-2 text-sm text-slate-600">{hasDegree?'Your resume already contains a formal degree. An additional degree is not treated as a default requirement; further study should be a strategic choice tied to a specific role or employer.':'No formal degree was detected in this analysis. Review employer and licensing requirements for the selected career before choosing further education.'}</p></div>}
       {tab==='roadmap'&&<div>{roadmap.length?roadmap.map(([period,items])=><div key={period} className="mb-5"><h4 className="font-bold">{period}</h4><ol className="mt-2 space-y-2">{items.map((x,i)=><li key={i} className="rounded-xl border p-3 text-sm"><b>{i+1}.</b> {x}</li>)}</ol></div>):<p className="text-sm text-slate-500">No roadmap actions were returned for this career.</p>}{alignedCourses.length>0&&<div className="mt-6"><h4 className="font-bold">Your ongoing courses that address gaps</h4>{alignedCourses.map(c=><div key={c.id} className="mt-2 rounded-xl border p-3 text-sm">{c.course_name}</div>)}</div>}</div>}
-      {tab==='resources'&&<div><h4 className="font-bold">Career-specific official resources</h4><p className="mt-1 text-sm text-slate-500">These links are generated from the selected career and its confirmed O*NET/BLS mapping, rather than showing the same generic links for every profession.</p><div className="mt-4 grid gap-3 md:grid-cols-2">{resources.map((r,i)=><a key={i} href={r.url} target="_blank" rel="noreferrer" className="rounded-xl border p-4 hover:border-indigo-300"><p className="text-xs font-bold uppercase text-indigo-600">{r.type}</p><b>{r.name}</b><p className="mt-1 text-sm text-slate-600">{r.purpose}</p><span className="mt-3 inline-block text-sm font-bold text-indigo-700">Open resource</span></a>)}</div>{!resources.length&&<p className="mt-4 text-sm text-slate-500">No validated external resource is available for this career yet.</p>}</div>}
+      {tab==='resources'&&<div><h4 className="font-bold">Career-specific official resources</h4><p className="mt-1 text-sm text-slate-500">Resources are tied to the selected career and confirmed occupation mapping. Unconfirmed wage sources are not shown as if they were validated.</p><div className="mt-4 grid gap-3 md:grid-cols-2">{resources.map((r,i)=><div key={i} className="rounded-xl border p-4"><p className="text-xs font-bold uppercase text-indigo-600">{r.type}</p><b>{r.name}</b><p className="mt-1 text-sm text-slate-600">{r.purpose}</p><a href={r.url} target="_blank" rel="noreferrer" className="mt-3 inline-block rounded-lg bg-indigo-50 px-3 py-2 text-sm font-bold text-indigo-700 hover:bg-indigo-100">Open official resource</a></div>)}</div>{!resources.length&&<p className="mt-4 text-sm text-slate-500">No validated external resource is available for this career yet.</p>}</div>}
     </div></section>}
   </div>;
 }
