@@ -1,15 +1,15 @@
 """Evidence-aware career report endpoint.
 
-Career reports must use the same resume evidence that powers Career Intelligence.
-This prevents contradictions such as claiming a degree, license, or credential is
-missing when it is explicitly listed in the latest resume. Resume-listed credentials
-remain distinct from independently verified saved certificates.
+Career reports must use the same resume evidence and canonical Career Intelligence output.
+This prevents contradictions and stops the report from inventing new credential names that
+were not produced by the recommendation pipeline.
 """
 
 import json
 from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
+from recommendation_cleanup import credentials_equivalent
 
 
 class EvidenceAwareCareerAdviceRequest(BaseModel):
@@ -29,6 +29,25 @@ def _compact_items(items, fields, limit=20):
         if row:
             output.append(row)
     return output
+
+
+def _credential_name(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("name") or item.get("certification_name") or "").strip()
+    return str(item or "").strip()
+
+
+def _allowed_recommended_credentials(career_recommendations: List[Dict[str, Any]]) -> List[str]:
+    output: List[str] = []
+    for item in career_recommendations or []:
+        if not isinstance(item, dict):
+            continue
+        data = item.get("recommendation_data") if isinstance(item.get("recommendation_data"), dict) else item
+        for credential in data.get("recommended_certifications") or []:
+            name = _credential_name(credential)
+            if name and not any(credentials_equivalent(name, existing) for existing in output):
+                output.append(name)
+    return output[:20]
 
 
 def install_evidence_aware_report(app, resilient_llm_generate):
@@ -76,7 +95,19 @@ def install_evidence_aware_report(app, resilient_llm_generate):
                 "matched_skills": item.get("matched_skills") or data.get("matched_skills") or [],
                 "missing_skills": item.get("missing_skills") or data.get("missing_skills") or [],
                 "match_reason": data.get("match_reason") or item.get("match_reason"),
+                "recommended_certifications": data.get("recommended_certifications") or item.get("recommended_certifications") or [],
             })
+
+        allowed_credentials = _allowed_recommended_credentials(request.career_recommendations)
+        held_credentials = [
+            _credential_name(item)
+            for item in (evidence.get("certifications") or [])
+            if _credential_name(item)
+        ] + [
+            _credential_name(item)
+            for item in request.certifications
+            if _credential_name(item)
+        ]
 
         prompt = f"""
 Create a career-development report from the student's complete evidence profile.
@@ -86,9 +117,11 @@ EVIDENCE RULES:
 - Resume-listed licenses and credentials are valid resume evidence, but do NOT call them independently verified unless the saved/verified credential list confirms verification.
 - Give the greatest weight to demonstrated professional experience, formal education, licenses/credentials, and the ranked Career Intelligence results.
 - When the evidence strongly supports the student's existing profession, prioritize that profession and its logical advancement paths before suggesting unrelated career pivots.
-- For regulated careers, distinguish three things: formal education, resume-listed license/credential evidence, and independently verified credentials.
+- For regulated careers, distinguish formal education, resume-listed license/credential evidence, and independently verified credentials.
 - Do not downgrade an experienced professional to entry level merely because a credential has not been uploaded separately to the verification store.
-- Do not invent credentials, education, experience, or clinical/technical competencies.
+- Do not invent credentials, education, experience, clinical competencies, technical competencies, professional associations, fellowships, boards, or certification names.
+- Recommended certifications may ONLY use names from ALLOWED RECOMMENDED CREDENTIALS below. If that list is empty, return an empty recommended_certifications list.
+- Do not recommend a credential that is equivalent to one already held, even if the wording or acronym differs.
 - If Career Intelligence returns strong career matches, use those matches as the primary career paths rather than inventing unrelated alternatives.
 - Avoid recommending beginner training that duplicates evidence already present.
 
@@ -102,6 +135,7 @@ Projects: {json.dumps(projects)}
 Publications: {json.dumps(publications)}
 Ongoing courses: {json.dumps(courses)}
 Career Intelligence matches: {json.dumps(careers)}
+ALLOWED RECOMMENDED CREDENTIALS: {json.dumps(allowed_credentials)}
 
 Return ONLY JSON:
 {{
@@ -120,6 +154,24 @@ The regulated_roles_note should describe only requirements that are genuinely un
 """
         response = await resilient_llm_generate(prompt, max_tokens_override=2400)
         advice = json.loads(response)
+
+        # Final deterministic guard: the report cannot introduce a credential name that
+        # the canonical recommendation pipeline did not already provide.
+        report_credentials = advice.get("recommended_certifications") or []
+        filtered_credentials = []
+        for item in report_credentials:
+            name = _credential_name(item)
+            if not name:
+                continue
+            approved = next((allowed for allowed in allowed_credentials if credentials_equivalent(name, allowed)), None)
+            if not approved:
+                continue
+            if any(credentials_equivalent(approved, held) for held in held_credentials):
+                continue
+            if not any(credentials_equivalent(approved, existing) for existing in filtered_credentials):
+                filtered_credentials.append(approved)
+        advice["recommended_certifications"] = filtered_credentials
+
         advice["evidence_summary"] = {
             "formal_education_count": len(education),
             "resume_credential_count": len(resume_credentials),
