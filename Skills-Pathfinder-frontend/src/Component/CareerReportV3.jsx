@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
 import CareerReportV2 from './CareerReportV2';
+import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -36,13 +36,19 @@ const normalizeResumeCredential = (item, index) => ({
 });
 
 /**
- * Bridges the saved report UI to the same latest resume evidence used by Career Intelligence.
- * Resume-listed credentials are shown as evidence, but are deliberately not marked verified.
+ * Report isolation boundary.
+ *
+ * A generated report must describe one resume analysis, not the user's accumulated
+ * cross-resume skill/history profile. Load the latest analysis once, then pass that
+ * analysis id, its exact skills and its exact career recommendations downstream.
  */
 const CareerReportV3 = (props) => {
   const { user, certifications = [] } = props;
   const [ready, setReady] = useState(false);
   const [resumeEvidence, setResumeEvidence] = useState({});
+  const [analysisId, setAnalysisId] = useState(null);
+  const [analysisSkills, setAnalysisSkills] = useState([]);
+  const [analysisRecommendations, setAnalysisRecommendations] = useState([]);
 
   useEffect(() => {
     let active = true;
@@ -53,14 +59,23 @@ const CareerReportV3 = (props) => {
       }
       const { data, error } = await supabase
         .from('resume_analyses')
-        .select('raw_analysis, uploaded_at')
+        .select('id, raw_analysis, extracted_skills, recommendations, uploaded_at')
         .eq('user_id', user.id)
         .order('uploaded_at', { ascending: false })
         .limit(1)
         .maybeSingle();
       if (!active) return;
-      if (error) console.error('Career report could not load latest resume evidence:', error);
+      if (error) console.error('Career report could not load latest resume analysis:', error);
+
+      const raw = data?.raw_analysis && typeof data.raw_analysis === 'object' ? data.raw_analysis : {};
+      setAnalysisId(data?.id || raw.analysis_id || null);
       setResumeEvidence(resumeEvidenceFromRow(data));
+      setAnalysisSkills(
+        safe(raw.extracted_skills).length ? safe(raw.extracted_skills) : safe(data?.extracted_skills)
+      );
+      setAnalysisRecommendations(
+        safe(raw.recommendations).length ? safe(raw.recommendations) : safe(data?.recommendations)
+      );
       setReady(true);
     };
     load();
@@ -87,26 +102,32 @@ const CareerReportV3 = (props) => {
       }
       try {
         const body = JSON.parse(init.body || '{}');
-        const nextInit = {
+        return originalFetch(input, {
           ...init,
           body: JSON.stringify({
             ...body,
+            analysis_id: analysisId,
             resume_evidence: resumeEvidence || {},
           }),
-        };
-        return originalFetch(input, nextInit);
+        });
       } catch {
         return originalFetch(input, init);
       }
     };
     return () => { window.fetch = originalFetch; };
-  }, [ready, resumeEvidence]);
+  }, [ready, analysisId, resumeEvidence]);
 
   if (!ready) {
     return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"><div className="rounded-xl bg-white p-8 text-center shadow-2xl"><div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-teal-100 border-t-teal-600" /><p className="text-lg font-semibold">Preparing complete resume evidence…</p></div></div>;
   }
 
-  return <CareerReportV2 {...props} certifications={reportCertifications} />;
+  return <CareerReportV2
+    {...props}
+    analysisId={analysisId}
+    careerRecommendations={analysisRecommendations}
+    skills={analysisSkills}
+    certifications={reportCertifications}
+  />;
 };
 
 export default CareerReportV3;
