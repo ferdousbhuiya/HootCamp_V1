@@ -11,7 +11,28 @@ const apiBase = () => (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 const asList = (value) => Array.isArray(value) ? value : value ? [value] : [];
 const safe = (value) => Array.isArray(value) ? value : [];
 
-const CareerReportV2 = ({ user, profile, skills = [], certifications = [], courses = [], onClose }) => {
+const normalizeCareerRows = (items = []) => safe(items).map((rec, index) => ({
+  id: rec.id || `analysis-career-${index}`,
+  career_id: rec.career_id || rec.id || null,
+  career_title: rec.career_title || rec.path || 'Career path',
+  match_score: rec.match_score ?? null,
+  match_percentage: rec.match_percentage ?? (Number.isFinite(Number(rec.match_score)) ? Math.round(Number(rec.match_score) * 100) : null),
+  matched_skills: safe(rec.matched_skills),
+  missing_skills: safe(rec.missing_skills),
+  market_data: rec.market_data || {},
+  recommendation_data: rec.recommendation_data || rec,
+}));
+
+const CareerReportV2 = ({
+  user,
+  profile,
+  skills = [],
+  certifications = [],
+  courses = [],
+  analysisId = null,
+  careerRecommendations = [],
+  onClose,
+}) => {
   const [loading, setLoading] = useState(true);
   const [advice, setAdvice] = useState(null);
   const [error, setError] = useState(null);
@@ -34,24 +55,40 @@ const CareerReportV2 = ({ user, profile, skills = [], certifications = [], cours
     setLoading(true);
     setError(null);
     try {
+      const careerPromise = safe(careerRecommendations).length
+        ? Promise.resolve({ data: normalizeCareerRows(careerRecommendations), error: null })
+        : (() => {
+            let query = supabase.from('career_recommendations').select('*').eq('user_id', user.id);
+            if (analysisId) query = query.eq('source_analysis_id', analysisId);
+            return query.order('created_at', { ascending: false }).limit(8);
+          })();
+
       const [academicResult, subjectResult, goalResult, careerResult] = await Promise.all([
         supabase.from('academic_profiles').select('*').eq('user_id', user.id).maybeSingle(),
         supabase.from('academic_subjects').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
         supabase.from('career_goals').select('*').eq('user_id', user.id).eq('status', 'active').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-        supabase.from('career_recommendations').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(8)
+        careerPromise,
       ]);
       const failure = [academicResult, subjectResult, goalResult, careerResult].find((item) => item.error);
       if (failure?.error) throw failure.error;
+
+      const currentCareerRows = normalizeCareerRows(careerResult.data || []);
       setAcademic(academicResult.data || null);
       setSubjects(subjectResult.data || []);
       setGoal(goalResult.data || null);
-      setCareerRows(careerResult.data || []);
+      setCareerRows(currentCareerRows);
 
       const skillNames = skills.map((item) => item?.skill_name || item?.name || (typeof item === 'string' ? item : '')).filter(Boolean);
       const response = await fetch(`${apiBase()}/api/generate-career-advice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skills: skillNames, certifications, courses, career_recommendations: careerResult.data || [] })
+        body: JSON.stringify({
+          analysis_id: analysisId,
+          skills: skillNames,
+          certifications,
+          courses,
+          career_recommendations: currentCareerRows,
+        })
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.detail || `Career advice request failed (${response.status})`);
@@ -62,7 +99,8 @@ const CareerReportV2 = ({ user, profile, skills = [], certifications = [], cours
         academic_profile: academicResult.data || null,
         academic_subjects: subjectResult.data || [],
         career_goal: goalResult.data || null,
-        career_comparison: careerResult.data || []
+        career_comparison: currentCareerRows,
+        source_analysis_id: analysisId,
       };
       setAdvice(enrichedAdvice);
 
@@ -70,7 +108,7 @@ const CareerReportV2 = ({ user, profile, skills = [], certifications = [], cours
         user_id: user.id,
         report_type: 'career_intelligence',
         report_data: enrichedAdvice,
-        profile_snapshot: { ...(profile || {}), academic_profile: academicResult.data || null, academic_subjects: subjectResult.data || [], career_goal: goalResult.data || null },
+        profile_snapshot: { ...(profile || {}), academic_profile: academicResult.data || null, academic_subjects: subjectResult.data || [], career_goal: goalResult.data || null, source_analysis_id: analysisId },
         skills_snapshot: skills,
         certifications_snapshot: certifications,
         courses_snapshot: courses,
@@ -80,10 +118,10 @@ const CareerReportV2 = ({ user, profile, skills = [], certifications = [], cours
       setSavedReportId(reportRow.id);
 
       const plan = body.advice.action_plan || {};
-      const strongestPath = body.advice.career_readiness?.strongest_path || goalResult.data?.career_title || careerResult.data?.[0]?.career_title || null;
+      const strongestPath = body.advice.career_readiness?.strongest_path || goalResult.data?.career_title || currentCareerRows?.[0]?.career_title || null;
       const { error: planError } = await supabase.from('learning_plans').insert({
         user_id: user.id,
-        target_career_id: careerResult.data?.[0]?.career_id || null,
+        target_career_id: currentCareerRows?.[0]?.career_id || null,
         target_career_title: strongestPath,
         plan_30_days: { items: asList(plan['30_days']) },
         plan_6_months: { items: asList(plan['6_months']) },
@@ -92,7 +130,7 @@ const CareerReportV2 = ({ user, profile, skills = [], certifications = [], cours
         recommended_courses: [],
         recommended_certifications: body.advice.recommended_certifications || [],
         ongoing_course_alignment: body.advice.ongoing_course_alignment || [],
-        plan_data: { ...body.advice, progress: { '30_days': [], '6_months': [], '1_year': [] } },
+        plan_data: { ...body.advice, source_analysis_id: analysisId, progress: { '30_days': [], '6_months': [], '1_year': [] } },
         status: 'active',
         updated_at: new Date().toISOString()
       });
