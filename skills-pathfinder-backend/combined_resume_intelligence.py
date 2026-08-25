@@ -16,16 +16,24 @@ information supported by the resume. Do not assume a technology or engineering c
 Preserve education, employment, projects, publications, credentials/licenses and courses
 as separate evidence categories.
 
-At the same time, identify 3 to 6 careers strongly supported by the complete evidence.
-Prioritize the person's CURRENT profession and demonstrated specialty when professional
-experience clearly establishes one. Then include natural specialization, advancement or
-adjacent paths. Do not force the person into a predefined catalog and do not invent a
-career pivot merely because a tool or transferable skill appears.
+FIRST establish professional identity independently of skill matching. Use the most recent
+and relevant occupational role, sustained work history, formal education, professional
+license/credentials, and domain-specific accomplishments. The current profession is what
+the person demonstrably does, not whichever alternative career happens to share the most
+skills. A specialty skill must not replace the documented profession unless the resume's
+actual role establishes that specialty.
+
+Then identify 3 to 6 evidence-supported career paths. Include EXACTLY ONE
+candidate_relation=current_profession representing the established occupation. Then add
+natural specialization, advancement, and adjacent paths when supported. A specialization
+or adjacent path may later receive a high readiness score, but that score must not redefine
+the person's professional identity. Do not force the person into a predefined catalog and
+do not invent a career pivot merely because a tool or transferable skill appears.
 
 For every career provide 5 to 8 core competencies and evidence keywords. These are a
-blueprint only. Do NOT calculate a match score. The application calculates scores itself.
-For regulated professions, mark regulated_role=true and describe regulation broadly;
-do not invent jurisdiction-specific legal requirements.
+blueprint only. Do NOT calculate a match score. The application calculates readiness
+scores itself. For regulated professions, mark regulated_role=true and describe regulation
+broadly; do not invent jurisdiction-specific legal requirements.
 
 Return ONLY JSON in this structure:
 {{
@@ -68,10 +76,14 @@ Extraction and planning rules:
   experience bullets, not only from a dedicated Skills section.
 - Education and credentials are evidence categories, not skills.
 - Candidate evidence must point to facts present in this resume.
-- Current profession must outrank unrelated pivots when substantial experience supports it.
+- The current_profession candidate must be grounded primarily in occupational role/history;
+  education and credentials corroborate it. Do not choose it merely from skill overlap.
+- Use specialization for a narrower practice area inside the established profession.
+- Use advancement for a plausible next-level role that is not already the person's current role.
+- Use adjacent only for a genuine transferable-skill alternative or career transition.
 - Tailor 30-day, 6-month and 1-year actions to the person's demonstrated professional level.
-  Do not give an experienced professional entry-level internship, beginner portfolio or student-style
-  advice unless the candidate career is a genuine career pivot that requires it.
+  Do not give an experienced professional entry-level internship, beginner portfolio, basic workshop,
+  or student-style advice unless the candidate career is a genuine pivot that requires it.
 - Do not recommend obtaining a credential or license that the resume already lists as held.
   Existing credentials may be acknowledged as evidence or maintenance/renewal considerations, but
   they are not new recommendations.
