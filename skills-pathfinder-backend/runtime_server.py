@@ -33,6 +33,7 @@ from final_stabilization import (
     normalize_education,
 )
 from final_demo_stability import install_bls_table_fallback, stabilize_current_profession
+from final_market_hardening import install as install_final_market_hardening
 
 install_main_skill_patch(main_module)
 install_semantic_match_patch(blueprint_module, discovery_module)
@@ -43,6 +44,7 @@ install_combined_resume_intelligence(evidence_module, resilient_llm_generate)
 install_evidence_aware_report(app, resilient_llm_generate)
 install_market_runtime_patch()
 install_bls_table_fallback(market_module)
+install_final_market_hardening(market_module, generic_market_module)
 install_generic_market_route(app, resilient_llm_generate)
 
 
