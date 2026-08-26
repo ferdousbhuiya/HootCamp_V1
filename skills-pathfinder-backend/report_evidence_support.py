@@ -6,6 +6,8 @@ were not produced by the recommendation pipeline.
 """
 
 import json
+import re
+from difflib import SequenceMatcher
 from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
@@ -71,6 +73,77 @@ def _allowed_recommended_credentials(career_recommendations: List[Dict[str, Any]
     return output[:20]
 
 
+def _norm_title(value: Any) -> str:
+    text = str(value or "").lower().replace("&", " and ")
+    text = re.sub(r"[^a-z0-9 ]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _career_tokens(value: Any) -> set[str]:
+    stop = {"and", "or", "the", "a", "an", "if", "experience", "aligns", "position", "positions", "role", "roles"}
+    return {token for token in _norm_title(value).split() if len(token) > 2 and token not in stop}
+
+
+def _same_career_title(left: Any, right: Any) -> bool:
+    """Profession-neutral title comparison for report/canonical recommendation alignment."""
+    a = _norm_title(left)
+    b = _norm_title(right)
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+    ta, tb = _career_tokens(left), _career_tokens(right)
+    if ta and tb:
+        overlap = len(ta & tb) / max(1, min(len(ta), len(tb)))
+        if overlap >= 0.60:
+            return True
+    return SequenceMatcher(None, a, b).ratio() >= 0.72
+
+
+def _match_percentage(value: Any) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return score * 100.0 if 0.0 <= score <= 1.0 else score
+
+
+def _gate_application_readiness(advice: Dict[str, Any], careers: List[Dict[str, Any]], threshold: float = 50.0) -> None:
+    """Keep 'Can Apply Now' consistent with canonical Career Intelligence scores.
+
+    Current profession is always preserved. Other careers must match a canonical career
+    and meet the generic readiness threshold. Unmatched AI-invented titles are removed.
+    """
+    readiness = advice.get("application_readiness")
+    if not isinstance(readiness, dict):
+        return
+
+    can_apply = readiness.get("can_apply_now") or []
+    kept = []
+    moved = []
+    for entry in can_apply:
+        title = str(entry or "").strip()
+        if not title:
+            continue
+        matched = next((row for row in careers if _same_career_title(title, row.get("title"))), None)
+        if not matched:
+            continue
+        relation = _norm_title(matched.get("candidate_relation")).replace(" ", "_")
+        pct = _match_percentage(matched.get("match_percentage"))
+        if relation == "current_profession" or pct >= threshold:
+            kept.append(title)
+        else:
+            moved.append(title)
+
+    readiness["can_apply_now"] = kept
+    prepare = readiness.get("prepare_before_applying") or []
+    existing_prepare = [str(item).strip() for item in prepare if str(item or "").strip()]
+    for title in moved:
+        if not any(_same_career_title(title, item) for item in existing_prepare):
+            existing_prepare.append(title)
+    readiness["prepare_before_applying"] = existing_prepare
+
+
 def install_evidence_aware_report(app, resilient_llm_generate):
     async def generate_evidence_aware_advice(request: EvidenceAwareCareerAdviceRequest):
         evidence = request.resume_evidence or {}
@@ -118,6 +191,7 @@ def install_evidence_aware_report(app, resilient_llm_generate):
                     career_credentials.append(name)
             careers.append({
                 "title": item.get("path") or item.get("career_title") or data.get("path"),
+                "candidate_relation": item.get("candidate_relation") or data.get("candidate_relation"),
                 "match_percentage": item.get("match_percentage") or data.get("match_percentage") or item.get("match_score"),
                 "matched_skills": item.get("matched_skills") or data.get("matched_skills") or [],
                 "missing_skills": item.get("missing_skills") or data.get("missing_skills") or [],
@@ -135,11 +209,19 @@ def install_evidence_aware_report(app, resilient_llm_generate):
             if _credential_name(item)
         ]
 
+        education_rule = (
+            "Formal education evidence is present below. Mention only degrees, diplomas, fields, or education levels explicitly shown in that evidence."
+            if education
+            else "No formal education evidence is present below. Do not infer or claim a high school diploma, college degree, or any other education level; say only that no formal degree was detected if education must be discussed."
+        )
+
         prompt = f"""
 Create a career-development report from the student's complete evidence profile.
 
 EVIDENCE RULES:
 - Never say the student lacks a degree, license, certification, or experience when it is explicitly present below.
+- {education_rule}
+- Never state a specific degree, diploma, school credential, or education level unless it appears in Formal education from latest resume.
 - Resume-listed licenses and credentials are valid resume evidence, but do NOT call them independently verified unless the saved/verified credential list confirms verification.
 - Give the greatest weight to demonstrated professional experience, formal education, licenses/credentials, and the ranked Career Intelligence results.
 - When the evidence strongly supports the student's existing profession, prioritize that profession and its logical advancement paths before suggesting unrelated career pivots.
@@ -150,6 +232,7 @@ EVIDENCE RULES:
 - Do not recommend a credential that is equivalent to one already held, even if the wording or acronym differs.
 - If Career Intelligence returns strong career matches, use those matches as the primary career paths rather than inventing unrelated alternatives.
 - Avoid recommending beginner training that duplicates evidence already present.
+- application_readiness.can_apply_now must not include a non-current career with weak Career Intelligence readiness. Treat the canonical Career Intelligence scores below as authoritative.
 
 Skills: {json.dumps(request.skills[:120])}
 Formal education from latest resume: {json.dumps(education)}
@@ -196,6 +279,10 @@ The regulated_roles_note should describe only requirements that are genuinely un
             if not any(credentials_equivalent(approved, existing) for existing in filtered_credentials):
                 filtered_credentials.append(approved)
         advice["recommended_certifications"] = filtered_credentials
+
+        # Final deterministic readiness guard: report application-readiness cannot contradict
+        # the canonical Career Intelligence scores supplied in the same request.
+        _gate_application_readiness(advice, careers)
 
         advice["evidence_summary"] = {
             "formal_education_count": len(education),
