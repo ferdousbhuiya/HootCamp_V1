@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+import market_intelligence as market
 from market_intelligence import (
     CAREER_TO_BLS_TITLE,
     CAREER_TO_ONET_TITLE,
@@ -10,6 +12,12 @@ from market_intelligence import (
 
 
 class MarketIntelligenceTests(unittest.TestCase):
+    def setUp(self):
+        market._cache.clear()
+
+    def tearDown(self):
+        market._cache.clear()
+
     def test_parse_bls_oews_table(self):
         sample = """
         <pre>
@@ -45,6 +53,32 @@ class MarketIntelligenceTests(unittest.TestCase):
         records = parse_bls_oews_table(sample)
         self.assertEqual(records["industrial engineers"]["employment"], 365740)
         self.assertEqual(records["mechanical engineers"]["mean_annual_wage"], 113610)
+
+    def test_failed_bls_fetch_is_not_cached_and_next_request_retries(self):
+        valid = """
+        <pre>
+          Registered nurses................................................................. 3,379,720 48.76 101,420 46.90
+        </pre>
+        """
+        with patch.object(market, "_fetch_text", side_effect=[OSError("blocked"), valid]) as fetch:
+            first = market._bls_records()
+            second = market._bls_records()
+        self.assertEqual(first, {})
+        self.assertIn("registered nurses", second)
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_empty_bls_parse_is_not_cached(self):
+        valid = """
+        <pre>
+          Registered nurses................................................................. 3,379,720 48.76 101,420 46.90
+        </pre>
+        """
+        with patch.object(market, "_fetch_text", side_effect=["<html>Access denied</html>", valid]) as fetch:
+            first = market._bls_records()
+            second = market._bls_records()
+        self.assertEqual(first, {})
+        self.assertIn("registered nurses", second)
+        self.assertEqual(fetch.call_count, 2)
 
     def test_key_student_paths_have_explicit_bls_mappings(self):
         expected = {
