@@ -1,8 +1,9 @@
-"""Final deterministic stabilization for generic career intelligence.
+"""General stabilization helpers for Skills Pathfinder.
 
-This module deliberately leaves resume extraction untouched. It strengthens semantic
-competency matching, prevents cross-domain false positives, and adds conservative market
-title variants and explicit official occupation crosswalks for validated profession titles.
+This module leaves resume extraction and profession discovery generic. It improves
+semantic evidence matching, applies an evidence threshold to adjacent-career pivots,
+and preserves education evidence. It intentionally contains no profession-title market
+crosswalks or profession-specific readiness tables.
 """
 from __future__ import annotations
 
@@ -10,9 +11,12 @@ import re
 from typing import Any, Dict, Iterable, List
 
 
+# Small semantic-equivalence vocabulary used only to normalize skill wording. These are
+# competency phrases, not profession/title rules, and the generic token matcher remains
+# the primary path for unseen professions and skills.
 ALIASES = {
     "legal research": {"legal research and drafting", "legal research & drafting"},
-    "pleading drafting": {"legal research and drafting", "legal research & drafting", "commercial litigation"},
+    "pleading drafting": {"legal research and drafting", "legal research & drafting"},
     "litigation strategy": {"commercial litigation", "corporate litigation", "dispute resolution"},
     "settlement management": {"negotiation", "dispute resolution", "commercial litigation"},
     "trial advocacy": {"commercial litigation", "dispute resolution"},
@@ -39,63 +43,6 @@ ALIASES = {
     "security operations management": {"security operations oversight"},
 }
 
-DOMAIN_GROUPS = {
-    "legal": {"attorney", "lawyer", "legal", "litigation", "counsel", "law"},
-    "dental": {"dentist", "dental", "dentistry", "endodont", "orthodont", "periodont"},
-    "security": {"security", "guard", "protection", "surveillance"},
-    "engineering": {"engineer", "engineering", "manufacturing", "mechanical", "electrical", "industrial"},
-    "software": {"software", "developer", "programmer", "data", "cyber"},
-}
-
-MARKET_VARIANTS = {
-    "corporate litigation attorney": ["Lawyers"],
-    "litigation partner": ["Lawyers"],
-    "in-house corporate counsel": ["Lawyers"],
-    "general dentist": ["Dentists, General"],
-    "senior general dentist": ["Dentists, General"],
-    "restorative dentist": ["Dentists, General"],
-    "endodontist": ["Dentists, All Other Specialists"],
-    "security officer": ["Security Guards"],
-    "lead security officer": ["Security Guards"],
-    "facility security specialist": ["Security Guards"],
-}
-
-# These titles/codes are broad official occupation families. Specialty titles remain visible
-# in the UI, while wage/employment statistics are explicitly labeled with the broader mapped
-# occupation rather than being presented as specialty-specific data.
-EXPLICIT_BLS_MAPPINGS = {
-    "corporate litigation attorney": "Lawyers",
-    "litigation partner": "Lawyers",
-    "in house corporate counsel": "Lawyers",
-    "general dentist": "Dentists, General",
-    "senior general dentist": "Dentists, General",
-    "restorative dentist": "Dentists, General",
-    "endodontist": "Dentists, All Other Specialists",
-    "security officer": "Security Guards",
-    "lead security officer": "Security Guards",
-    "facility security specialist": "Security Guards",
-}
-
-EXPLICIT_ONET_MAPPINGS = {
-    "corporate litigation attorney": "Lawyers",
-    "litigation partner": "Lawyers",
-    "in house corporate counsel": "Lawyers",
-    "general dentist": "Dentists, General",
-    "senior general dentist": "Dentists, General",
-    "restorative dentist": "Dentists, General",
-    "endodontist": "Dentists, All Other Specialists",
-    "security officer": "Security Guards",
-    "lead security officer": "Security Guards",
-    "facility security specialist": "Security Guards",
-}
-
-EXPLICIT_BLS_CODES = {
-    "Lawyers": "231011",
-    "Dentists, General": "291021",
-    "Dentists, All Other Specialists": "291029",
-    "Security Guards": "339032",
-}
-
 
 def norm(value: Any) -> str:
     text = str(value or "").lower().replace("&", " and ")
@@ -103,18 +50,27 @@ def norm(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip(" .-/")
 
 
+def _stem_token(token: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "", str(token or "").lower())
+    if len(token) > 5 and token.endswith("ing"):
+        token = token[:-3]
+    elif len(token) > 4 and token.endswith("ies"):
+        token = token[:-3] + "y"
+    elif len(token) > 4 and token.endswith("ics"):
+        token = token[:-3]
+    elif len(token) > 4 and token.endswith("es"):
+        token = token[:-2]
+    elif len(token) > 3 and token.endswith("s"):
+        token = token[:-1]
+    return token
+
+
 def _stem_tokens(value: Any) -> set[str]:
-    out = set()
-    for token in norm(value).split():
-        if len(token) > 5 and token.endswith("ing"):
-            token = token[:-3]
-        elif len(token) > 4 and token.endswith("ics"):
-            token = token[:-3]
-        elif len(token) > 4 and token.endswith("s"):
-            token = token[:-1]
-        if len(token) >= 3:
-            out.add(token)
-    return out
+    return {
+        _stem_token(token)
+        for token in norm(value).split()
+        if len(_stem_token(token)) >= 3
+    }
 
 
 def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
@@ -124,6 +80,7 @@ def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
         direct = original(index, keyword)
         if direct:
             return direct
+
         wanted = norm(keyword)
         candidates = set(ALIASES.get(wanted, set()))
         for canonical, synonyms in ALIASES.items():
@@ -133,6 +90,7 @@ def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
             row = index.get(norm(candidate))
             if row:
                 return row
+
         wanted_tokens = _stem_tokens(wanted)
         if not wanted_tokens:
             return None
@@ -144,7 +102,7 @@ def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
                 continue
             containment = len(wanted_tokens & tokens) / max(1, min(len(wanted_tokens), len(tokens)))
             jaccard = len(wanted_tokens & tokens) / max(1, len(wanted_tokens | tokens))
-            score = 0.7 * containment + 0.3 * jaccard
+            score = 0.72 * containment + 0.28 * jaccard
             if containment >= 0.67 and score > best_score:
                 best, best_score = row, score
         return best
@@ -153,29 +111,36 @@ def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
     discovery_module.score_blueprint = blueprint_module.score_blueprint
 
 
-def _domain_for(text: Any) -> str:
-    value = norm(text)
-    scores = {name: sum(1 for token in terms if token in value) for name, terms in DOMAIN_GROUPS.items()}
-    best = max(scores, key=scores.get)
-    return best if scores[best] else ""
-
-
 def filter_cross_domain(current_title: str, recommendations: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Apply a profession-neutral evidence gate to career pivots.
+
+    We trust current-profession, specialization and advancement relationships established
+    from resume history. A genuinely adjacent/cross-career pivot is kept only when it has
+    substantial evidence: at least four matched competencies and >=60% readiness, or at
+    least three matched competencies with >=70% readiness and strong discovery confidence.
+    No profession names or domain dictionaries are involved.
+    """
     rows = [dict(x) for x in recommendations if isinstance(x, dict)]
-    current_domain = _domain_for(current_title)
-    if not current_domain:
-        return rows
-    filtered = []
+    filtered: List[Dict[str, Any]] = []
     for row in rows:
         relation = norm(row.get("candidate_relation")).replace(" ", "_")
-        title = row.get("path") or row.get("career_title") or ""
-        domain = _domain_for(title)
-        if relation == "current_profession" or not domain or domain == current_domain:
+        if relation in {"current_profession", "specialization", "advancement"}:
             filtered.append(row)
             continue
-        score = float(row.get("match_score") or 0)
+
+        try:
+            score = float(row.get("match_score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        try:
+            discovery = float(row.get("discovery_confidence") or 0.0)
+        except (TypeError, ValueError):
+            discovery = 0.0
         matched = len(row.get("matched_skills") or [])
-        if relation == "adjacent" and score >= 0.60 and matched >= 4:
+
+        strong = score >= 0.60 and matched >= 4
+        very_strong = score >= 0.70 and matched >= 3 and discovery >= 0.80
+        if strong or very_strong:
             filtered.append(row)
     return filtered
 
@@ -191,33 +156,16 @@ def current_title(profile: Dict[str, Any], structured: Dict[str, Any]) -> str:
 
 
 def install_market_variants_patch(generic_market_module) -> None:
-    """Install deterministic broad-official occupation mappings before market lookup.
+    """Compatibility hook; market resolution is intentionally fully generic now.
 
-    The generic resolver already validates O*NET/SOC data. These mappings simply give it
-    known broad occupation families for specialty titles that otherwise fail exact lookup.
+    generic_market_resolution already resolves titles against the full O*NET dataset and
+    then validates SOC/OEWS data. Do not inject per-profession aliases or SOC codes here.
     """
-    original = generic_market_module._market_title_variants
-
-    def variants(title: str):
-        output = list(original(title))
-        key = norm(title)
-        for mapped in MARKET_VARIANTS.get(key, []):
-            if mapped not in output:
-                output.append(mapped)
-        return output
-
-    generic_market_module._market_title_variants = variants
-
-    market = generic_market_module.market
-    for career, mapped_title in EXPLICIT_BLS_MAPPINGS.items():
-        market.CAREER_TO_BLS_TITLE[market._normalize(career)] = mapped_title
-    for career, mapped_title in EXPLICIT_ONET_MAPPINGS.items():
-        market.CAREER_TO_ONET_TITLE[market._normalize(career)] = mapped_title
-    market.BLS_TITLE_TO_OCCUPATION_CODE.update(EXPLICIT_BLS_CODES)
+    return None
 
 
 def normalize_education(structured: Dict[str, Any]) -> Dict[str, Any]:
-    """Preserve non-degree formal education instead of treating it as absent."""
+    """Preserve explicit formal education, including non-degree school diplomas."""
     structured = dict(structured or {})
     education = list(structured.get("education") or [])
     if not education:
