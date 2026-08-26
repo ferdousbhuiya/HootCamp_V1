@@ -38,33 +38,37 @@ def test_digital_radiography_satisfies_digital_imaging():
     assert row and row["name"] == "Digital Radiography"
 
 
-def test_dentist_does_not_get_weak_manufacturing_engineer_path():
+def test_weak_adjacent_pivot_is_filtered_without_profession_rules():
     rows = [
-        {"path": "General Dentist", "candidate_relation": "current_profession", "match_score": .55, "matched_skills": ["A", "B", "C"]},
-        {"path": "Manufacturing Engineer", "candidate_relation": "adjacent", "match_score": .37, "matched_skills": ["CAD", "Troubleshooting"]},
-        {"path": "Endodontist", "candidate_relation": "specialization", "match_score": .42, "matched_skills": ["Endodontics", "Digital Radiography"]},
+        {"path": "Current Role", "candidate_relation": "current_profession", "match_score": .55, "matched_skills": ["A", "B", "C"]},
+        {"path": "Unrelated Adjacent Role", "candidate_relation": "adjacent", "match_score": .37, "matched_skills": ["Generic Skill", "Troubleshooting"], "discovery_confidence": .9},
+        {"path": "Specialized Role", "candidate_relation": "specialization", "match_score": .42, "matched_skills": ["A", "B"]},
     ]
-    filtered = filter_cross_domain("General Dentist", rows)
+    filtered = filter_cross_domain("Current Role", rows)
     titles = [row["path"] for row in filtered]
-    assert "General Dentist" in titles
-    assert "Endodontist" in titles
-    assert "Manufacturing Engineer" not in titles
+    assert "Current Role" in titles
+    assert "Specialized Role" in titles
+    assert "Unrelated Adjacent Role" not in titles
 
 
-def test_market_variants_include_broad_official_family():
-    assert "Lawyers" in generic_market._market_title_variants("Corporate Litigation Attorney")
-    assert "Dentists, General" in generic_market._market_title_variants("General Dentist")
-    assert "Security Guards" in generic_market._market_title_variants("Security Officer")
+def test_strong_adjacent_pivot_is_kept_when_evidence_is_substantial():
+    rows = [{
+        "path": "Evidence-Supported Adjacent Role",
+        "candidate_relation": "adjacent",
+        "match_score": .72,
+        "matched_skills": ["A", "B", "C", "D"],
+        "discovery_confidence": .85,
+    }]
+    filtered = filter_cross_domain("Current Role", rows)
+    assert [row["path"] for row in filtered] == ["Evidence-Supported Adjacent Role"]
 
 
-def test_explicit_market_mappings_are_installed():
-    market = generic_market.market
-    assert market.CAREER_TO_BLS_TITLE[market._normalize("General Dentist")] == "Dentists, General"
-    assert market.CAREER_TO_BLS_TITLE[market._normalize("Corporate Litigation Attorney")] == "Lawyers"
-    assert market.CAREER_TO_BLS_TITLE[market._normalize("Security Officer")] == "Security Guards"
-    assert market.BLS_TITLE_TO_OCCUPATION_CODE["Dentists, General"] == "291021"
-    assert market.BLS_TITLE_TO_OCCUPATION_CODE["Lawyers"] == "231011"
-    assert market.BLS_TITLE_TO_OCCUPATION_CODE["Security Guards"] == "339032"
+def test_market_patch_does_not_add_profession_specific_mappings():
+    before_bls = dict(generic_market.market.CAREER_TO_BLS_TITLE)
+    before_onet = dict(generic_market.market.CAREER_TO_ONET_TITLE)
+    install_market_variants_patch(generic_market)
+    assert generic_market.market.CAREER_TO_BLS_TITLE == before_bls
+    assert generic_market.market.CAREER_TO_ONET_TITLE == before_onet
 
 
 def test_bls_cpr_equivalent_wording_is_not_recommended_twice():
