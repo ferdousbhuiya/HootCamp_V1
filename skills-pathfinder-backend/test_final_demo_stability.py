@@ -37,7 +37,7 @@ def test_same_resume_evidence_gets_same_current_profession_score_despite_bluepri
     assert out1[0]["match_percentage"] == out2[0]["match_percentage"] == 95.0
     assert out1[0]["matched_skills"] == out2[0]["matched_skills"]
     assert out1[0]["missing_skills"] == out2[0]["missing_skills"] == []
-    assert out1[0]["readiness_basis"]["method"] == "profession_agnostic_resume_evidence"
+    assert out1[0]["readiness_basis"]["method"] == "profession_agnostic_documented_role_evidence"
 
 
 def test_current_profession_stabilization_does_not_change_specialization():
