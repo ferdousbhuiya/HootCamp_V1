@@ -2,8 +2,9 @@
 
 This module leaves resume extraction and profession discovery generic. It improves
 semantic evidence matching, applies an evidence threshold to adjacent-career pivots,
-and preserves education evidence. It intentionally contains no profession-title market
-crosswalks or profession-specific readiness tables.
+preserves documented current-role careers in the catalog fallback, and preserves
+education evidence. It intentionally contains no profession-title market crosswalks or
+profession-specific readiness tables.
 """
 from __future__ import annotations
 
@@ -73,6 +74,15 @@ def _stem_tokens(value: Any) -> set[str]:
     }
 
 
+def _title_overlap(left: Any, right: Any) -> float:
+    a, b = _stem_tokens(left), _stem_tokens(right)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    return len(a & b) / max(1, min(len(a), len(b)))
+
+
 def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
     original = blueprint_module._find_keyword
 
@@ -116,9 +126,7 @@ def filter_cross_domain(current_title: str, recommendations: Iterable[Dict[str, 
 
     We trust current-profession, specialization and advancement relationships established
     from resume history. A genuinely adjacent/cross-career pivot is kept only when it has
-    substantial evidence: at least four matched competencies and >=60% readiness, or at
-    least three matched competencies with >=70% readiness and strong discovery confidence.
-    No profession names or domain dictionaries are involved.
+    substantial evidence. No profession names or domain dictionaries are involved.
     """
     rows = [dict(x) for x in recommendations if isinstance(x, dict)]
     filtered: List[Dict[str, Any]] = []
@@ -143,6 +151,66 @@ def filter_cross_domain(current_title: str, recommendations: Iterable[Dict[str, 
         if strong or very_strong:
             filtered.append(row)
     return filtered
+
+
+def install_current_role_catalog_preservation(recommendation_module) -> None:
+    """Keep catalog careers supported by documented work-role titles.
+
+    The local catalog is a fallback. If a resume explicitly documents a role whose title
+    overlaps a catalog career, that career should not disappear merely because a specialty
+    outranks it. The rule is title/evidence based and contains no profession names.
+    """
+    if getattr(recommendation_module, "_role_preservation_installed", False):
+        return
+
+    original = recommendation_module.get_career_recommendations
+
+    def wrapped(extracted_skills, top_n=5, structured_evidence=None):
+        results = list(original(extracted_skills, top_n=top_n, structured_evidence=structured_evidence))
+        evidence = structured_evidence or {}
+        role_titles = [
+            str(item.get("role") or "").strip()
+            for item in evidence.get("experience") or []
+            if isinstance(item, dict) and str(item.get("role") or "").strip()
+        ]
+        if not role_titles:
+            return results
+
+        supported = []
+        seen = {str(item.get("id") or item.get("path") or "") for item in results}
+        for career in getattr(recommendation_module, "CAREER_PATHS", []):
+            if not isinstance(career, dict):
+                continue
+            overlap = max((_title_overlap(career.get("path"), role) for role in role_titles[:4]), default=0.0)
+            if overlap < 0.50:
+                continue
+            scoring = recommendation_module._score_career(extracted_skills, career, structured_evidence)
+            if float(scoring.get("match_score") or 0.0) < 0.15:
+                continue
+            row = recommendation_module._career_result(career, scoring)
+            row["documented_role_overlap"] = round(overlap, 3)
+            supported.append(row)
+
+        supported.sort(
+            key=lambda row: (row.get("documented_role_overlap", 0), row.get("match_score", 0)),
+            reverse=True,
+        )
+
+        merged = []
+        merged_ids = set()
+        # Preserve up to two role-supported catalog careers, then fill with normal ranking.
+        for row in supported[:2] + results:
+            key = str(row.get("id") or row.get("path") or "")
+            if not key or key in merged_ids:
+                continue
+            merged_ids.add(key)
+            merged.append(row)
+            if len(merged) >= max(1, int(top_n or 5)):
+                break
+        return merged
+
+    recommendation_module.get_career_recommendations = wrapped
+    recommendation_module._role_preservation_installed = True
 
 
 def current_title(profile: Dict[str, Any], structured: Dict[str, Any]) -> str:
