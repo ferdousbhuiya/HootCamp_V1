@@ -14,6 +14,7 @@ import threading
 import time
 from difflib import SequenceMatcher
 from typing import Any, Dict, Optional
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 BLS_API_URL = os.getenv("BLS_API_URL", "https://api.bls.gov/publicAPI/v2/timeseries/data/")
@@ -25,7 +26,12 @@ ONET_RELEASE = "30.3"
 ONET_SOURCE_NAME = "O*NET Database, U.S. Department of Labor/ETA"
 CACHE_TTL_SECONDS = int(os.getenv("MARKET_CACHE_TTL_SECONDS", "43200"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("MARKET_HTTP_TIMEOUT_SECONDS", "12"))
-USER_AGENT = "Mozilla/5.0 SkillsPathfinder/1.0"
+HTTP_FETCH_RETRIES = max(1, int(os.getenv("MARKET_HTTP_FETCH_RETRIES", "2")))
+USER_AGENT = os.getenv(
+    "MARKET_HTTP_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+)
 
 _cache: Dict[str, Dict[str, Any]] = {}
 _cache_lock = threading.Lock()
@@ -137,9 +143,32 @@ CAREER_TO_ONET_TITLE = {
 
 
 def _fetch_text(url: str) -> str:
-    req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/json,text/plain,*/*", "Accept-Language": "en-US,en;q=0.9"})
-    with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
-        return response.read().decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+    """Fetch public market/reference text with bounded retries.
+
+    Some public labor-data endpoints occasionally reject automated requests or fail
+    transiently. Retry a small number of times with normal browser request headers.
+    Callers still degrade to unavailable data if the source remains unreachable.
+    """
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+    last_error = None
+    for attempt in range(HTTP_FETCH_RETRIES):
+        try:
+            req = Request(url, headers=headers)
+            with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
+                return response.read().decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+            if attempt + 1 < HTTP_FETCH_RETRIES:
+                time.sleep(0.35 * (attempt + 1))
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Unable to fetch market source: {url}")
 
 
 def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -216,7 +245,25 @@ def _bls_api_record(mapped_title: str) -> Optional[Dict[str, Any]]:
 
 
 def _bls_records() -> Dict[str, Dict[str, Any]]:
-    return _cached("bls-oews-html", lambda: parse_bls_oews_table(_fetch_text(BLS_OEWS_URL)))
+    """Return parsed BLS rows, caching only successful non-empty responses.
+
+    A blocked/failed BLS request must not poison market intelligence for the full
+    cache TTL. When the source becomes reachable, the next request can recover.
+    """
+    key = "bls-oews-html"
+    now = time.time()
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and now - entry["time"] < CACHE_TTL_SECONDS and entry.get("value"):
+            return entry["value"]
+    try:
+        records = parse_bls_oews_table(_fetch_text(BLS_OEWS_URL))
+    except Exception:
+        return {}
+    if records:
+        with _cache_lock:
+            _cache[key] = {"time": now, "value": records}
+    return records
 
 
 def _onet_rows():
@@ -248,60 +295,55 @@ def lookup_bls_market(career_title: str) -> Dict[str, Any]:
             occupation_code = BLS_TITLE_TO_OCCUPATION_CODE.get(mapped)
             return {"available": True, **record, "occupation_code": occupation_code, "soc_code": _soc_from_bls_code(occupation_code), "mapped_occupation": mapped, "mapping_method": "explicit_conservative_mapping", "retrieval_method": "bls_html_fallback", "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_OEWS_URL}
     except Exception as html_exc:
-        return {"available": False, "reason": f"BLS API unavailable ({api_error or 'no data'}); HTML fallback unavailable ({html_exc}).", "mapped_occupation": mapped, "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_API_URL}
-    return {"available": False, "reason": f"The mapped BLS occupation '{mapped}' was not found. API detail: {api_error or 'no current data returned'}.", "mapped_occupation": mapped, "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_API_URL}
+        return {"available": False, "reason": f"BLS market source unavailable: {html_exc}", "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_OEWS_URL}
+    reason = "BLS public API did not return the mapped occupation series, and the official OEWS table fallback did not contain the mapped title."
+    if api_error:
+        reason += " Live API access may be temporarily unavailable."
+    return {"available": False, "reason": reason, "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_OEWS_URL}
 
 
-def lookup_onet_occupation(career_title: str, bls_soc_code: Optional[str] = None) -> Dict[str, Any]:
-    target = _mapped_title(career_title, CAREER_TO_ONET_TITLE) or career_title
+def lookup_onet_occupation(career_title: str) -> Dict[str, Any]:
+    requested = str(career_title or "").strip()
+    mapped = _mapped_title(requested, CAREER_TO_ONET_TITLE)
+    target = mapped or requested
+    try:
+        rows = _onet_rows()
+    except Exception as exc:
+        return {"available": False, "reason": f"O*NET occupation data unavailable: {exc}", "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
     target_norm = _normalize(target)
-    rows = _onet_rows()
-    exact = next((row for row in rows if _normalize(row.get("title")) == target_norm), None)
-    if exact:
-        best, method, score = exact, "explicit_or_exact_title", 1.0
-    else:
-        candidates = rows
-        if bls_soc_code:
-            same_family = [row for row in rows if _onet_base_soc(row.get("onetsoc_code")) == bls_soc_code]
-            if same_family:
-                candidates = same_family
-        ranked = sorted(((SequenceMatcher(None, target_norm, _normalize(row.get("title"))).ratio(), row) for row in candidates), key=lambda item: item[0], reverse=True)
-        score, best = ranked[0] if ranked else (0.0, None)
-        method = "soc_family_title_similarity" if bls_soc_code and candidates is not rows else "title_similarity"
-    if not best or score < 0.70:
-        return {"available": False, "reason": "No sufficiently close O*NET occupation match was found.", "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
-    return {"available": True, "onet_soc_code": best.get("onetsoc_code"), "base_soc_code": _onet_base_soc(best.get("onetsoc_code")), "occupation_title": best.get("title"), "description": best.get("description"), "match_score": round(score, 4), "mapping_method": method, "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
+    best_row, best_score = None, 0.0
+    for row in rows:
+        title_norm = _normalize(row.get("title"))
+        if title_norm == target_norm:
+            best_row, best_score = row, 1.0
+            break
+        score = SequenceMatcher(None, target_norm, title_norm).ratio()
+        if score > best_score:
+            best_row, best_score = row, score
+    if not best_row or best_score < (0.74 if mapped else 0.88):
+        return {"available": False, "reason": "No sufficiently confident O*NET occupation mapping was found.", "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
+    code = str(best_row.get("code") or "")
+    return {"available": True, "occupation_title": best_row.get("title"), "onet_soc_code": code, "base_soc_code": _onet_base_soc(code), "description": best_row.get("description"), "mapping_method": "explicit_title_mapping" if mapped else "high_confidence_title_match", "match_confidence": round(best_score, 3), "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
 
 
 def _build_crosswalk(career_title: str, bls: Dict[str, Any], onet: Dict[str, Any]) -> Dict[str, Any]:
-    bls_title = bls.get("occupation_title") or bls.get("mapped_occupation") if bls else None
-    onet_title = onet.get("occupation_title") if onet else None
-    bls_soc = bls.get("soc_code") if bls else None
-    onet_base = onet.get("base_soc_code") or _onet_base_soc(onet.get("onet_soc_code")) if onet else None
-    if not (bls and bls.get("available") and onet and onet.get("available")):
-        relationship = "partial_mapping"
-    elif _normalize(bls_title) == _normalize(onet_title):
-        relationship = "same_occupation_title"
-    elif bls_soc and onet_base and bls_soc == onet_base:
-        relationship = "same_soc_family_different_detail"
+    bls_title = bls.get("occupation_title") or bls.get("mapped_occupation")
+    onet_title = onet.get("occupation_title")
+    bls_soc, onet_soc = bls.get("soc_code"), onet.get("base_soc_code")
+    same_soc = bool(bls_soc and onet_soc and bls_soc == onet_soc)
+    same_title = bool(bls_title and onet_title and _normalize(bls_title) == _normalize(onet_title))
+    if bls.get("available") and onet.get("available"):
+        relationship = "same_occupation_title" if same_title else ("same_soc_family_different_detail" if same_soc else "different_confirmed_mappings")
+    elif bls.get("available"):
+        relationship = "bls_only"
+    elif onet.get("available"):
+        relationship = "onet_only"
     else:
-        relationship = "different_occupation_mappings"
-    return {"requested_career": career_title, "relationship": relationship, "bls_occupation_title": bls_title, "bls_soc_code": bls_soc, "onet_occupation_title": onet_title, "onet_soc_code": onet.get("onet_soc_code") if onet else None, "same_soc_family": bool(bls_soc and onet_base and bls_soc == onet_base)}
+        relationship = "unmapped"
+    return {"requested_career": career_title, "relationship": relationship, "same_soc_family": same_soc, "bls_occupation_title": bls_title, "bls_soc_code": bls_soc, "onet_occupation_title": onet_title, "onet_soc_code": onet.get("onet_soc_code"), "onet_base_soc_code": onet_soc}
 
 
 def get_market_intelligence(career_title: str) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"career_title": career_title, "retrieved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "bls": None, "onet": None, "crosswalk": None, "warnings": []}
-    try:
-        result["bls"] = lookup_bls_market(career_title)
-    except Exception as exc:
-        result["bls"] = {"available": False, "reason": f"BLS lookup unavailable: {exc}", "source": BLS_SOURCE_NAME, "source_period": BLS_OEWS_PERIOD, "source_url": BLS_API_URL}
-        result["warnings"].append("BLS market data could not be refreshed; career matching is unaffected.")
-    try:
-        bls_soc = result["bls"].get("soc_code") if result["bls"] else None
-        result["onet"] = lookup_onet_occupation(career_title, bls_soc)
-    except Exception as exc:
-        result["onet"] = {"available": False, "reason": f"O*NET lookup unavailable: {exc}", "source": ONET_SOURCE_NAME, "source_release": ONET_RELEASE, "source_url": ONET_OCCUPATION_DATA_URL}
-        result["warnings"].append("O*NET occupation detail could not be refreshed; career matching is unaffected.")
-    result["crosswalk"] = _build_crosswalk(career_title, result["bls"], result["onet"])
-    result["available"] = bool(result["bls"].get("available") or result["onet"].get("available"))
-    return result
+    bls = lookup_bls_market(career_title)
+    onet = lookup_onet_occupation(career_title)
+    return {"requested_career": career_title, "bls": bls, "onet": onet, "crosswalk": _build_crosswalk(career_title, bls, onet)}
