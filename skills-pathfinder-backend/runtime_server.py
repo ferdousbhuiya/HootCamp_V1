@@ -26,6 +26,7 @@ from skill_quality import install_main_skill_patch
 from final_stabilization import (
     current_title,
     filter_cross_domain,
+    install_current_role_catalog_preservation,
     install_market_variants_patch,
     install_semantic_match_patch,
     normalize_education,
@@ -34,6 +35,7 @@ from final_demo_stability import install_bls_table_fallback, stabilize_current_p
 
 install_main_skill_patch(main_module)
 install_semantic_match_patch(blueprint_module, discovery_module)
+install_current_role_catalog_preservation(recommendation_module)
 install_market_variants_patch(generic_market_module)
 install_combined_resume_intelligence(evidence_module, resilient_llm_generate)
 install_evidence_aware_report(app, resilient_llm_generate)
