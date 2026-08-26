@@ -26,11 +26,15 @@ jobs:
           cache: pip
           cache-dependency-path: skills-pathfinder-backend/requirements.txt
       - name: Install backend dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
       - name: Compile backend modules
-        run: python -m py_compile main.py server.py runtime_server.py evidence_server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py market_intelligence.py generic_market_resolution.py dynamic_career_discovery.py combined_resume_intelligence.py recommendation_cleanup.py report_evidence_support.py robust_json_llm.py skill_quality.py market_runtime_patch.py
-      - name: Run backend unit tests
+        run: python -m py_compile main.py server.py runtime_server.py evidence_server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py market_intelligence.py generic_market_resolution.py dynamic_career_discovery.py combined_resume_intelligence.py recommendation_cleanup.py report_evidence_support.py robust_json_llm.py skill_quality.py market_runtime_patch.py final_stabilization.py final_demo_stability.py
+      - name: Run legacy backend unit tests
         run: python -m unittest -v test_recommendation_engine.py test_certificate_verification.py test_extended_catalog.py test_market_intelligence.py test_generic_market_resolution.py test_dynamic_career_discovery.py
+      - name: Run final stabilization regressions
+        run: python -m pytest -q test_final_stabilization.py test_final_demo_stability.py test_regulated_profession_support.py
       - name: Import actual production FastAPI application
         env:
           GROQ_API_KEY: ''
