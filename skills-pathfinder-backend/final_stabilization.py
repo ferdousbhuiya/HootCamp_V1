@@ -177,7 +177,6 @@ def install_current_role_catalog_preservation(recommendation_module) -> None:
             return results
 
         supported = []
-        seen = {str(item.get("id") or item.get("path") or "") for item in results}
         for career in getattr(recommendation_module, "CAREER_PATHS", []):
             if not isinstance(career, dict):
                 continue
@@ -198,8 +197,9 @@ def install_current_role_catalog_preservation(recommendation_module) -> None:
 
         merged = []
         merged_ids = set()
-        # Preserve up to two role-supported catalog careers, then fill with normal ranking.
-        for row in supported[:2] + results:
+        # Preserve every evidence-supported documented-role career up to the caller's
+        # requested result limit, then fill remaining slots with the normal ranking.
+        for row in supported + results:
             key = str(row.get("id") or row.get("path") or "")
             if not key or key in merged_ids:
                 continue
