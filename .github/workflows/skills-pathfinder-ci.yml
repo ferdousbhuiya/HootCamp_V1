@@ -1,0 +1,106 @@
+name: Skills Pathfinder CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/**'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills-pathfinder-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: skills-pathfinder-backend/requirements.txt
+      - name: Install backend dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Compile backend modules
+        run: python -m py_compile main.py server.py runtime_server.py evidence_server.py recommendation_engine.py certificate_verification.py career_catalog_extended.py market_intelligence.py generic_catalog_stability.py generic_market_resolution.py dynamic_career_discovery.py combined_resume_intelligence.py recommendation_cleanup.py report_evidence_support.py robust_json_llm.py skill_quality.py market_runtime_patch.py final_stabilization.py final_demo_stability.py
+      - name: Run legacy backend unit tests
+        run: python -m unittest -v test_recommendation_engine.py test_certificate_verification.py test_extended_catalog.py test_market_intelligence.py test_generic_market_resolution.py test_dynamic_career_discovery.py
+      - name: Run final stabilization regressions
+        run: python -m pytest -q test_final_stabilization.py test_final_demo_stability.py test_regulated_profession_support.py
+      - name: Import actual production FastAPI application
+        env:
+          GROQ_API_KEY: ''
+          SUPABASE_URL: ''
+          SUPABASE_KEY: ''
+          TESSERACT_CMD: tesseract
+        run: |
+          python - <<'PY'
+          import runtime_server
+          app = runtime_server.app
+          assert app.title == 'Skills Pathfinder API'
+          paths = {route.path for route in app.routes}
+          required = {
+              '/', '/health', '/api/upload', '/api/resume-evidence',
+              '/api/recommendations', '/api/verify-certificate',
+              '/api/verify-certificate-link', '/api/generate-career-advice',
+              '/api/career-advisor', '/api/market-data'
+          }
+          missing = required - paths
+          assert not missing, f'Missing API routes: {sorted(missing)}'
+          print('Actual Docker production app imported successfully')
+          print('Validated routes:', ', '.join(sorted(required)))
+          PY
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Skills-Pathfinder-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: Skills-Pathfinder-frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build frontend
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_ANON_KEY: test-anon-key
+          VITE_API_URL: ''
+        run: npm run build
+      - name: Install Chromium for visual smoke test
+        run: npx --yes playwright@1.55.0 install chromium
+      - name: Start production preview
+        run: |
+          nohup npm run preview -- --host 127.0.0.1 --port 4173 > /tmp/skills-pathfinder-preview.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:4173 >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/skills-pathfinder-preview.log
+          exit 1
+      - name: Capture desktop landing page
+        run: npx --yes playwright@1.55.0 screenshot --viewport-size="1440,1000" --wait-for-timeout=1200 http://127.0.0.1:4173 auth-desktop.png
+      - name: Capture mobile landing page
+        run: npx --yes playwright@1.55.0 screenshot --viewport-size="390,844" --wait-for-timeout=1200 http://127.0.0.1:4173 auth-mobile.png
+      - name: Upload UI screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: skills-pathfinder-ui-screenshots
+          path: |
+            Skills-Pathfinder-frontend/auth-desktop.png
+            Skills-Pathfinder-frontend/auth-mobile.png
+          retention-days: 14

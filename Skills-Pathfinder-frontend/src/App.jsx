@@ -1,16 +1,37 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Auth from './Component/Auth';
 import UserDashboard from './Component/UserDashboard';
 import UploadComponent from './Component/UploadComponent';
 import SkillDashboard from './Component/SkillDashboard';
 import CareerRecommendations from './Component/CareerRecommendations';
-import OnboardingWizard from './Component/OnboardingWizard';
+import OnboardingWizardV2 from './Component/OnboardingWizardV2';
+import CareerAdvisor from './Component/CareerAdvisor';
+import SavedCareerHistory from './Component/SavedCareerHistory';
+import StudentCareerDashboard from './Component/StudentCareerDashboard';
+import { uploadPrivateDocument } from './lib/documentStorage';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
+
+const normalizeName = (value = '') => String(value).trim().replace(/\s+/g, ' ').toLowerCase();
+const safeArray = (value) => Array.isArray(value) ? value : [];
+
+const hydrateSavedAnalysis = (row) => {
+  if (!row) return null;
+  const raw = row.raw_analysis && typeof row.raw_analysis === 'object' ? row.raw_analysis : {};
+  return {
+    ...raw,
+    analysis_id: row.id || raw.analysis_id || null,
+    filename: row.filename || raw.filename || 'Saved resume',
+    character_count: row.character_count ?? raw.character_count ?? 0,
+    extracted_skills: safeArray(raw.extracted_skills).length ? safeArray(raw.extracted_skills) : safeArray(row.extracted_skills),
+    explanations: safeArray(raw.explanations).length ? safeArray(raw.explanations) : safeArray(row.explanations),
+    recommendations: safeArray(raw.recommendations).length ? safeArray(raw.recommendations) : safeArray(row.recommendations)
+  };
+};
 
 function App() {
   const [user, setUser] = useState(null);
@@ -21,35 +42,80 @@ function App() {
   const [error, setError] = useState(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
+  const [openingCareerIntelligence, setOpeningCareerIntelligence] = useState(false);
+  const [openingResumeReview, setOpeningResumeReview] = useState(false);
+  const [workspaceNavigationKey, setWorkspaceNavigationKey] = useState(0);
+  const [workspaceMode, setWorkspaceMode] = useState('dashboard');
+
+  const readOnboardingState = async (userId) => {
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('has_completed_onboarding')
+      .eq('id', userId)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    return Boolean(profile?.has_completed_onboarding);
+  };
 
   useEffect(() => {
+    let active = true;
     const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) console.error('Session check failed:', sessionError);
+      if (!active) return;
       setUser(session?.user || null);
-      // Returning users go to dashboard. Onboarding gate is for new signups only.
       if (session?.user) {
-        setHasCompletedOnboarding(true);
+        try {
+          const completed = await readOnboardingState(session.user.id);
+          if (!active) return;
+          setHasCompletedOnboarding(completed);
+          setShowOnboarding(false);
+          setWorkspaceMode('dashboard');
+        } catch (profileError) {
+          console.error('Profile onboarding check failed:', profileError);
+          if (!active) return;
+          setHasCompletedOnboarding(false);
+          setShowOnboarding(false);
+          setWorkspaceMode('dashboard');
+          setError('Your account is signed in, but profile completion status could not be restored. You can still use the career workspace and update your profile later.');
+        }
       }
-      setLoading(false);
+      if (active) setLoading(false);
     };
 
     checkSession();
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user || null);
+      if (!session?.user) {
+        setResults(null);
+        setShowRecommendations(false);
+        setShowOnboarding(false);
+        setHasCompletedOnboarding(false);
+        setWorkspaceMode('dashboard');
+        setError(null);
+      }
     });
-
-    return () => subscription.unsubscribe();
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
-  const handleAuthSuccess = (authenticatedUser, isNewUser = false) => {
+  const handleAuthSuccess = async (authenticatedUser, isNewUser = false) => {
     setUser(authenticatedUser);
-    // Only show onboarding for brand-new signups, not returning sign-ins
+    setWorkspaceMode('dashboard');
+    setShowOnboarding(false);
+    setError(null);
     if (isNewUser) {
-      setShowOnboarding(true);
-    } else {
-      setHasCompletedOnboarding(true);
-      setShowOnboarding(false);
+      setHasCompletedOnboarding(false);
+      return;
+    }
+    try {
+      setHasCompletedOnboarding(await readOnboardingState(authenticatedUser.id));
+    } catch (profileError) {
+      console.error('Could not restore onboarding state after sign in:', profileError);
+      setHasCompletedOnboarding(false);
+      setError('Signed in successfully, but profile completion status could not be loaded. You can continue and update your profile later.');
     }
   };
 
@@ -59,108 +125,368 @@ function App() {
     setShowRecommendations(false);
     setShowOnboarding(false);
     setHasCompletedOnboarding(false);
+    setWorkspaceMode('dashboard');
+    setError(null);
   };
 
-  const handleUploadSuccess = async (data) => {
-    setResults(data);
-    setShowRecommendations(false);
-    setError(null);
-    setIsLoading(false);
+  const syncResumeSkills = async (analysisId, data) => {
+    const incomingSkills = safeArray(data.extracted_skills);
+    if (!incomingSkills.length || !user?.id) return;
+    const { data: existingSkills, error: existingError } = await supabase
+      .from('skill_tracking')
+      .select('id,skill_name,source,verification_status,confidence,metadata')
+      .eq('user_id', user.id);
+    if (existingError) throw existingError;
 
-    if (user) {
-      try {
-        await supabase.from('resume_analyses').insert({
+    const explanationMap = new Map(safeArray(data.explanations).map((item) => [normalizeName(item.skill), item]));
+    const existingMap = new Map((existingSkills || []).map((item) => [normalizeName(item.skill_name), item]));
+    for (const skill of incomingSkills) {
+      if (!skill?.name) continue;
+      const key = normalizeName(skill.name);
+      const current = existingMap.get(key);
+      const explanation = explanationMap.get(key);
+      const confidence = Number.isFinite(Number(skill.confidence)) ? Number(skill.confidence) : 0.8;
+      if (current) {
+        const updates = {
+          category: skill.category || undefined,
+          confidence: Math.max(Number(current.confidence || 0), confidence),
+          evidence: explanation?.evidence || undefined,
+          metadata: { ...(current.metadata || {}), latest_resume_analysis_id: analysisId, latest_reasoning: explanation?.reasoning || null },
+          last_seen_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        Object.keys(updates).forEach((field) => updates[field] === undefined && delete updates[field]);
+        const { error: updateError } = await supabase.from('skill_tracking').update(updates).eq('id', current.id).eq('user_id', user.id);
+        if (updateError) throw updateError;
+      } else {
+        const { data: inserted, error: insertError } = await supabase.from('skill_tracking').insert({
           user_id: user.id,
-          filename: data.filename,
-          character_count: data.character_count,
-          skills_count: data.extracted_skills?.length || 0,
-          extracted_skills: data.extracted_skills,
-          explanations: data.explanations,
-          recommendations: data.recommendations
-        });
-      } catch (err) {
-        console.error('Error saving analysis:', err);
+          skill_name: skill.name.trim(),
+          category: skill.category || 'General',
+          proficiency_level: 'unknown',
+          status: 'existing',
+          source: 'resume_extracted',
+          verification_status: 'ai_verified',
+          confidence,
+          evidence: explanation?.evidence || null,
+          source_record_id: analysisId,
+          metadata: { reasoning: explanation?.reasoning || null, sources: [{ source: 'resume_extracted', source_record_id: analysisId, verification_status: 'ai_verified', evidence: explanation?.evidence || null }] },
+          last_seen_at: new Date().toISOString()
+        }).select('id,skill_name,source,verification_status,confidence,metadata').single();
+        if (insertError) throw insertError;
+        existingMap.set(key, inserted);
       }
     }
   };
 
-  const handleUploadError = (err) => {
-    setError(err.message || 'Upload failed. Please try again.');
+  const saveCareerRecommendationSnapshots = async (analysisId, recommendations = []) => {
+    if (!recommendations.length || !user?.id) return;
+    const timestamp = Date.now();
+    const rows = recommendations.map((rec, index) => ({
+      user_id: user.id,
+      client_record_key: `${analysisId}:${rec.id || index}:${timestamp}`,
+      source_analysis_id: analysisId || null,
+      career_id: rec.id || null,
+      career_title: rec.path || rec.career_title || 'Career path',
+      category: rec.category || null,
+      match_score: rec.match_score ?? null,
+      match_percentage: rec.match_percentage ?? (Number.isFinite(Number(rec.match_score)) ? Math.round(Number(rec.match_score) * 100) : null),
+      skill_gap_percentage: rec.skill_gap_percentage ?? null,
+      matched_skills: rec.matched_skills || [],
+      missing_skills: rec.missing_skills || [],
+      recommendation_data: rec,
+      market_data: {}
+    }));
+    const { error: recError } = await supabase.from('career_recommendations').insert(rows);
+    if (recError) throw recError;
+  };
+
+  const handleUploadSuccess = async (data, originalFile) => {
+    const normalizedResult = { ...data, recommendations: safeArray(data.recommendations) };
+    setResults(normalizedResult);
+    setWorkspaceMode('analysis');
+    setShowRecommendations(false);
+    setError(null);
     setIsLoading(false);
-  };
-
-  const handleShowRecommendations = () => {
-    setShowRecommendations(true);
-  };
-
-  const handleOnboardingComplete = () => {
-    setShowOnboarding(false);
-    setHasCompletedOnboarding(true);
-    // Mark user as having completed onboarding in database
-    if (user) {
-      supabase.from('profiles').update({ has_completed_onboarding: true }).eq('id', user.id);
+    if (!user) return;
+    try {
+      const { data: savedAnalysis, error: saveError } = await supabase.from('resume_analyses').insert({
+        user_id: user.id,
+        filename: data.filename,
+        character_count: data.character_count,
+        skills_count: safeArray(data.extracted_skills).length,
+        extracted_skills: safeArray(data.extracted_skills),
+        explanations: safeArray(data.explanations),
+        recommendations: safeArray(data.recommendations),
+        ai_failed: Boolean(data.ai_failed),
+        extraction_status: data.ai_failed ? 'fallback_completed' : 'completed',
+        document_type: 'resume',
+        raw_analysis: data,
+        storage_bucket: 'student-resumes'
+      }).select('id').single();
+      if (saveError) throw saveError;
+      normalizedResult.analysis_id = savedAnalysis.id;
+      setResults({ ...normalizedResult });
+      await syncResumeSkills(savedAnalysis.id, data);
+      await saveCareerRecommendationSnapshots(savedAnalysis.id, safeArray(data.recommendations));
+      if (originalFile) {
+        try {
+          const storagePath = await uploadPrivateDocument({ supabase, userId: user.id, file: originalFile, bucket: 'student-resumes' });
+          const { error: storageUpdateError } = await supabase.from('resume_analyses').update({ storage_bucket: 'student-resumes', storage_path: storagePath }).eq('id', savedAnalysis.id).eq('user_id', user.id);
+          if (storageUpdateError) throw storageUpdateError;
+        } catch (storageError) {
+          console.error('Resume source document storage failed:', storageError);
+          setError('Your resume analysis and findings were saved, but the original resume file could not be stored. You can continue using the analysis.');
+        }
+      }
+    } catch (saveError) {
+      console.error('Error persisting analysis findings:', saveError);
+      setError('The analysis completed, but one or more findings could not be saved.');
     }
   };
 
-  // Show onboarding wizard for new users
-  if (showOnboarding && user) {
-    return <OnboardingWizard user={user} onComplete={handleOnboardingComplete} />;
-  }
+  const handleUploadError = (err) => {
+    setError(err?.message || 'Upload failed. Please try again.');
+    setIsLoading(false);
+  };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-indigo-600"></div>
-      </div>
-    );
-  }
+  const handleOnboardingComplete = async () => {
+    setShowOnboarding(false);
+    setHasCompletedOnboarding(true);
+    setWorkspaceMode('dashboard');
+    if (!user) return;
+    const { error: updateError } = await supabase.from('profiles').update({ has_completed_onboarding: true, updated_at: new Date().toISOString() }).eq('id', user.id);
+    if (updateError) setError('Profile setup finished, but the completion status could not be saved.');
+  };
 
-  if (!user) {
-    return <Auth onAuthSuccess={handleAuthSuccess} />;
-  }
+  const handleOnboardingCancel = () => setShowOnboarding(false);
+
+  const openDashboard = () => {
+    setResults(null);
+    setShowRecommendations(false);
+    setWorkspaceMode('dashboard');
+    setError(null);
+    setWorkspaceNavigationKey((current) => current + 1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const startNewAnalysis = () => {
+    setResults(null);
+    setShowRecommendations(false);
+    setWorkspaceMode('analysis');
+    setError(null);
+    setWorkspaceNavigationKey((current) => current + 1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const openSavedResumeReview = async (savedAnalysis = null) => {
+    if (!user?.id || openingResumeReview) return;
+    setOpeningResumeReview(true);
+    setError(null);
+    try {
+      let row = savedAnalysis;
+      if (!row) {
+        const { data, error: latestError } = await supabase
+          .from('resume_analyses')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('uploaded_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (latestError) throw latestError;
+        row = data;
+      } else if (!row.raw_analysis && row.id) {
+        const { data, error: fetchError } = await supabase
+          .from('resume_analyses')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('id', row.id)
+          .maybeSingle();
+        if (fetchError) throw fetchError;
+        row = data || row;
+      }
+
+      if (!row) {
+        startNewAnalysis();
+        return;
+      }
+
+      setResults(hydrateSavedAnalysis(row));
+      setShowRecommendations(false);
+      setWorkspaceMode('analysis');
+      setWorkspaceNavigationKey((current) => current + 1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (resumeError) {
+      console.error('Could not reopen saved resume review:', resumeError);
+      setWorkspaceMode('dashboard');
+      setError(`Your saved resume review could not be reopened: ${resumeError.message}`);
+    } finally {
+      setOpeningResumeReview(false);
+    }
+  };
+
+  const buildEvidenceFromSavedProfile = async () => {
+    const [skillsResult, academicResult, subjectsResult, coursesResult, certsResult, goalResult] = await Promise.all([
+      supabase.from('skill_tracking').select('*').eq('user_id', user.id),
+      supabase.from('academic_profiles').select('*').eq('user_id', user.id).maybeSingle(),
+      supabase.from('academic_subjects').select('*').eq('user_id', user.id),
+      supabase.from('ongoing_courses').select('*').eq('user_id', user.id),
+      supabase.from('saved_certifications').select('*').eq('user_id', user.id),
+      supabase.from('career_goals').select('*').eq('user_id', user.id).eq('status', 'active').order('created_at', { ascending: false }).limit(1).maybeSingle()
+    ]);
+    const failure = [skillsResult, academicResult, subjectsResult, coursesResult, certsResult, goalResult].find((item) => item.error);
+    if (failure?.error) throw failure.error;
+
+    const evidence = new Map();
+    const addEvidence = (name, category, confidence = 0.72, source = 'saved_profile') => {
+      const clean = String(name || '').trim();
+      if (!clean) return;
+      const key = normalizeName(clean);
+      const current = evidence.get(key);
+      if (!current || Number(current.confidence || 0) < confidence) evidence.set(key, { name: clean, category, confidence, source });
+    };
+
+    for (const skill of skillsResult.data || []) addEvidence(skill.skill_name, skill.category || 'Tracked Skill', Number(skill.confidence || 0.85), skill.source || 'tracked');
+    for (const subject of subjectsResult.data || []) {
+      safeArray(subject.skills_learned).forEach((skill) => addEvidence(skill, subject.subject_area || 'Academic Skill', 0.82, 'academic_subject'));
+      addEvidence(subject.subject_name, subject.subject_area || 'Academic Subject', subject.status === 'completed' ? 0.72 : 0.58, 'academic_subject');
+    }
+    for (const course of coursesResult.data || []) {
+      safeArray(course.extracted_skills).forEach((skill) => addEvidence(skill?.name || skill, course.subject_area || 'Course Skill', 0.76, 'ongoing_course'));
+      addEvidence(course.course_name, course.subject_area || 'Ongoing Course', normalizeName(course.status) === 'completed' ? 0.74 : 0.6, 'ongoing_course');
+    }
+    for (const cert of certsResult.data || []) {
+      safeArray(cert.extracted_skills).forEach((skill) => addEvidence(skill?.name || skill, skill?.category || 'Certification Skill', cert.is_verified ? 0.95 : 0.78, 'certificate'));
+      safeArray(cert.subjects).forEach((subject) => addEvidence(subject, 'Certificate Subject', cert.is_verified ? 0.9 : 0.72, 'certificate'));
+    }
+    const academic = academicResult.data || null;
+    if (academic?.field_of_study) addEvidence(academic.field_of_study, 'Field of Study', 0.7, 'academic_profile');
+    if (academic?.program_name) addEvidence(academic.program_name, 'Academic Program', 0.62, 'academic_profile');
+    safeArray(academic?.interests).forEach((interest) => addEvidence(interest, 'Career Interest', 0.55, 'academic_profile'));
+
+    return {
+      extracted_skills: Array.from(evidence.values()),
+      academic_profile: academic,
+      academic_subjects: subjectsResult.data || [],
+      ongoing_courses: coursesResult.data || [],
+      certifications: certsResult.data || [],
+      career_goal: goalResult.data || null
+    };
+  };
+
+  const openLatestCareerIntelligence = async (preferredResult = null) => {
+    if (!user?.id || openingCareerIntelligence) return;
+    setOpeningCareerIntelligence(true);
+    setWorkspaceMode('career');
+    setError(null);
+    try {
+      if (preferredResult && (safeArray(preferredResult.extracted_skills).length || safeArray(preferredResult.recommendations).length)) {
+        setResults(preferredResult);
+        setShowRecommendations(true);
+        setWorkspaceMode('career');
+        setWorkspaceNavigationKey((current) => current + 1);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+
+      const { data: analyses, error: latestError } = await supabase
+        .from('resume_analyses')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('uploaded_at', { ascending: false })
+        .limit(10);
+      if (latestError) throw latestError;
+
+      const useful = (analyses || []).find((row) => {
+        const hydrated = hydrateSavedAnalysis(row);
+        return safeArray(hydrated?.recommendations).length > 0 || safeArray(hydrated?.extracted_skills).length > 0;
+      });
+      if (useful) {
+        setResults(hydrateSavedAnalysis(useful));
+        setShowRecommendations(true);
+        setWorkspaceMode('career');
+        setWorkspaceNavigationKey((current) => current + 1);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+
+      const savedEvidence = await buildEvidenceFromSavedProfile();
+      if (!savedEvidence.extracted_skills.length) {
+        setResults(null);
+        setShowRecommendations(false);
+        setWorkspaceMode('dashboard');
+        setError('Career Intelligence needs some evidence. Add an academic subject, ongoing course, certificate, tracked skill, manual profile, or resume first.');
+        return;
+      }
+
+      setResults({
+        filename: 'Unified Saved Student Profile',
+        character_count: 0,
+        explanations: [],
+        recommendations: [],
+        ...savedEvidence,
+        evidence_only: true
+      });
+      setShowRecommendations(true);
+      setWorkspaceMode('career');
+      setWorkspaceNavigationKey((current) => current + 1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (careerError) {
+      console.error('Could not open Career Intelligence:', careerError);
+      setWorkspaceMode('dashboard');
+      setError(`Career Intelligence could not build from your saved evidence: ${careerError.message}`);
+    } finally {
+      setOpeningCareerIntelligence(false);
+    }
+  };
+
+  if (showOnboarding && user) return <OnboardingWizardV2 user={user} onComplete={handleOnboardingComplete} onCancel={handleOnboardingCancel} />;
+  if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="animate-spin rounded-full h-14 w-14 border-4 border-teal-100 border-t-teal-600" /></div>;
+  if (!user) return <Auth onAuthSuccess={handleAuthSuccess} />;
+
+  const currentWorkspace = workspaceMode === 'dashboard' ? 'Career Dashboard' : showRecommendations || workspaceMode === 'career' ? 'Career Intelligence' : results ? 'Resume Review' : 'Profile & Resume Analysis';
 
   return (
-    <UserDashboard
-      user={user}
-      onLogout={handleLogout}
-      onStartOnboarding={() => setShowOnboarding(true)}
-      onViewAnalysis={(savedAnalysis) => {
-        if (savedAnalysis) {
-          setResults({
-            filename: savedAnalysis.filename,
-            character_count: savedAnalysis.character_count,
-            extracted_skills: savedAnalysis.extracted_skills,
-            explanations: savedAnalysis.explanations,
-            recommendations: savedAnalysis.recommendations
-          });
-          setShowRecommendations(false);
-        } else {
-          setResults(null);
-          setShowRecommendations(false);
-        }
-      }}
-    >
-      {!results ? (
-        <UploadComponent 
-          onUploadSuccess={handleUploadSuccess}
-          onUploadError={handleUploadError}
-          isLoading={isLoading}
-          setIsLoading={setIsLoading}
-        />
-      ) : showRecommendations ? (
-        <CareerRecommendations 
-          skills={results} 
-          user={user}
-          onBack={() => setShowRecommendations(false)}
-        />
-      ) : (
-        <SkillDashboard 
-          results={results} 
-          onBack={() => setResults(null)}
-          onRecommendations={handleShowRecommendations}
-        />
-      )}
-    </UserDashboard>
+    <div className="authenticated-shell">
+      <div className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950 text-white shadow-xl shadow-slate-950/10">
+        <div className="mx-auto max-w-7xl px-4 py-3 sm:px-6"><div className="flex items-center gap-4">
+          <div className="flex shrink-0 items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-teal-500 text-sm font-black tracking-tight text-slate-950">SP</div><div className="hidden sm:block"><p className="text-sm font-bold">Skills Pathfinder</p><p className="text-[11px] text-slate-400">Student career workspace</p></div></div>
+          <nav className="ml-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-xl bg-white/5 p-1" aria-label="Primary workspace navigation">
+            <button onClick={openDashboard} className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold ${workspaceMode === 'dashboard' ? 'bg-teal-400 text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>Dashboard</button>
+            <button onClick={() => openSavedResumeReview()} disabled={openingResumeReview} className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-60 ${workspaceMode === 'analysis' && !showRecommendations ? 'bg-white text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>{openingResumeReview ? 'Opening…' : 'Profile / Resume'}</button>
+            <button onClick={() => openLatestCareerIntelligence()} disabled={openingCareerIntelligence} className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-60 ${showRecommendations || workspaceMode === 'career' ? 'bg-teal-400 text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>{openingCareerIntelligence ? 'Building…' : 'Career Intelligence'}</button>
+          </nav>
+          <div className="hidden shrink-0 items-center gap-2 lg:flex"><span className="h-2 w-2 rounded-full bg-emerald-400" /><span className="text-xs text-slate-300">Saved workspace</span></div>
+        </div></div>
+      </div>
+
+      <div className="border-b border-slate-200 bg-white/80 backdrop-blur"><div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4 sm:px-6 md:flex-row md:items-center md:justify-between"><div><p className="text-[11px] font-bold uppercase tracking-[0.18em] text-teal-700">Current workspace</p><h1 className="mt-1 text-xl font-bold text-slate-900">{currentWorkspace}</h1></div><div className="flex flex-wrap gap-2 text-xs"><span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium text-slate-600">Profile {hasCompletedOnboarding ? 'ready' : 'can be completed anytime'}</span><span className="rounded-full border border-teal-200 bg-teal-50 px-3 py-1.5 font-medium text-teal-800">Evidence saved to Supabase</span>{safeArray(results?.extracted_skills).length > 0 && <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 font-medium text-sky-800">{results.extracted_skills.length} evidence items</span>}</div></div></div>
+
+      <UserDashboard
+        key={workspaceNavigationKey}
+        user={user}
+        onboardingComplete={hasCompletedOnboarding}
+        onLogout={handleLogout}
+        onStartOnboarding={() => setShowOnboarding(true)}
+        onViewAnalysis={(savedAnalysis) => {
+          if (savedAnalysis) openSavedResumeReview(savedAnalysis);
+          else startNewAnalysis();
+        }}
+      >
+        {error && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">{error}</div>}
+        {workspaceMode === 'dashboard' ? (
+          <StudentCareerDashboard user={user} onAnalyzeResume={startNewAnalysis} onOpenCareerIntelligence={openLatestCareerIntelligence} onUpdateProfile={() => setShowOnboarding(true)} />
+        ) : !results ? (
+          <UploadComponent onUploadSuccess={handleUploadSuccess} onUploadError={handleUploadError} isLoading={isLoading} setIsLoading={setIsLoading} />
+        ) : showRecommendations ? (
+          <CareerRecommendations skills={results} user={user} onBack={() => { setShowRecommendations(false); setWorkspaceMode('analysis'); }} />
+        ) : (
+          <SkillDashboard results={results} onBack={startNewAnalysis} onRecommendations={() => { setShowRecommendations(true); setWorkspaceMode('career'); }} />
+        )}
+      </UserDashboard>
+      <SavedCareerHistory user={user} />
+      <CareerAdvisor user={user} />
+    </div>
   );
 }
 
