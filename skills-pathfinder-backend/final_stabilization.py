@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List
 
+from final_demo_stability import documented_role_readiness
+
 
 # Small semantic-equivalence vocabulary used only to normalize skill wording. These are
 # competency phrases, not profession/title rules, and the generic token matcher remains
@@ -133,12 +135,7 @@ def install_semantic_match_patch(blueprint_module, discovery_module) -> None:
 
 
 def filter_cross_domain(current_title: str, recommendations: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Apply a profession-neutral evidence gate to career pivots.
-
-    We trust current-profession, specialization and advancement relationships established
-    from resume history. A genuinely adjacent/cross-career pivot is kept only when it has
-    substantial evidence. No profession names or domain dictionaries are involved.
-    """
+    """Apply a profession-neutral evidence gate to career pivots."""
     rows = [dict(x) for x in recommendations if isinstance(x, dict)]
     filtered: List[Dict[str, Any]] = []
     for row in rows:
@@ -165,12 +162,13 @@ def filter_cross_domain(current_title: str, recommendations: Iterable[Dict[str, 
 
 
 def install_current_role_catalog_preservation(recommendation_module) -> None:
-    """Keep catalog careers supported by meaningful documented role-title evidence.
+    """Keep and fairly score catalog careers explicitly supported by work-role titles.
 
-    Generic job-level words such as manager, specialist, assistant, or officer are ignored
-    when comparing titles. A meaningful occupation word shared with documented work history
-    is sufficient to preserve the catalog career; its displayed readiness still comes from
-    the normal evidence scorer. No profession names or profession-specific rules are used.
+    The normal catalog scorer still supplies occupation-specific competency evidence.
+    When that vocabulary under-matches a role clearly documented in work history, a
+    profession-agnostic documented-role score supplies a floor. The floor is moderated by
+    the normal competency percentage, so title evidence cannot create a perfect score by
+    itself. No profession names or profession-specific rules are used.
     """
     if getattr(recommendation_module, "_role_preservation_installed", False):
         return
@@ -195,9 +193,39 @@ def install_current_role_catalog_preservation(recommendation_module) -> None:
             overlap = max((_title_overlap(career.get("path"), role) for role in role_titles[:4]), default=0.0)
             if overlap < 0.50:
                 continue
+
             scoring = recommendation_module._score_career(extracted_skills, career, structured_evidence)
             row = recommendation_module._career_result(career, scoring)
             row["documented_role_overlap"] = round(overlap, 3)
+
+            stable = documented_role_readiness(career.get("path") or "", evidence, extracted_skills)
+            if stable:
+                try:
+                    competency_ratio = max(0.0, min(1.0, float(row.get("competency_percentage") or 0.0) / 100.0))
+                except (TypeError, ValueError):
+                    competency_ratio = 0.0
+                # Documented role/history carries 70% of the stable floor; catalog-specific
+                # competency agreement can add the remaining 30%. This preserves real work
+                # identity while still rewarding occupation-specific evidence.
+                role_floor = stable["score"] * (0.70 + 0.30 * competency_ratio)
+                current_score = float(row.get("match_score") or 0.0)
+                if role_floor > current_score:
+                    score = min(stable["score"], role_floor)
+                    row["match_score"] = round(score, 4)
+                    row["match_percentage"] = round(score * 100, 1)
+                    row["skill_gap_percentage"] = round((1.0 - score) * 100, 1)
+                    row["match_reason"] = (
+                        f"Documented work-role evidence supports this career with "
+                        f"{stable['experience_years']:.1f} years of relevant experience; "
+                        f"catalog competency evidence is also considered."
+                    )
+                    row["readiness_basis"] = {
+                        "method": "profession_agnostic_documented_role_floor",
+                        "documented_role_overlap": round(overlap, 3),
+                        "experience_years": stable["experience_years"],
+                        "resume_evidence_competencies": len(stable["evidence"]),
+                        "catalog_competency_percentage": round(competency_ratio * 100, 1),
+                    }
             supported.append(row)
 
         supported.sort(
@@ -232,11 +260,7 @@ def current_title(profile: Dict[str, Any], structured: Dict[str, Any]) -> str:
 
 
 def install_market_variants_patch(generic_market_module) -> None:
-    """Compatibility hook; market resolution is intentionally fully generic now.
-
-    generic_market_resolution already resolves titles against the full O*NET dataset and
-    then validates SOC/OEWS data. Do not inject per-profession aliases or SOC codes here.
-    """
+    """Compatibility hook; market resolution is intentionally fully generic now."""
     return None
 
 
