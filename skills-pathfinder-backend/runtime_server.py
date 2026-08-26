@@ -72,7 +72,7 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         result["dynamic_career_discovery"] = bool(dynamic_results)
         merged = merge_recommendations(dynamic_results, catalog_results, top_n=8)
         merged = filter_cross_domain(current_title(career_profile, structured), merged)
-        merged = stabilize_current_profession(career_profile, structured, merged)
+        merged = stabilize_current_profession(career_profile, structured, merged, skills)
         result["recommendations"] = filter_existing_credentials(structured, merged)
         if not result["recommendations"]:
             result["career_discovery_warning"] = "No evidence-supported career recommendations were produced."
@@ -82,7 +82,7 @@ async def structured_resume_upload(file: UploadFile = File(...)):
         result["dynamic_career_discovery"] = False
         result["dynamic_career_discovery_error"] = str(exc)
         fallback = filter_cross_domain(current_title(result["career_profile"], structured), catalog_results)
-        fallback = stabilize_current_profession(result["career_profile"], structured, fallback)
+        fallback = stabilize_current_profession(result["career_profile"], structured, fallback, skills)
         result["recommendations"] = filter_existing_credentials(structured, fallback)
 
     return result
