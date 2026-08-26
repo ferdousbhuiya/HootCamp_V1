@@ -37,6 +37,25 @@ def _credential_name(item: Any) -> str:
     return str(item or "").strip()
 
 
+def _credential_has_authoritative_source(item: Any) -> bool:
+    """Accept specific recommended credential names only when canonical metadata supports them.
+
+    This is deliberately profession-neutral. AI-only names with a generic 'verify' provider
+    are not promoted as established credentials in the final report.
+    """
+    if not isinstance(item, dict):
+        return False
+    if item.get("verification_url") or item.get("source_url") or item.get("official_url"):
+        return True
+    provider = str(item.get("provider") or item.get("issuer") or item.get("organization") or "").strip()
+    if not provider:
+        return False
+    generic = provider.lower()
+    if "verify with" in generic or "official/recognized" in generic or "recognized provider" in generic:
+        return False
+    return True
+
+
 def _allowed_recommended_credentials(career_recommendations: List[Dict[str, Any]]) -> List[str]:
     output: List[str] = []
     for item in career_recommendations or []:
@@ -45,7 +64,9 @@ def _allowed_recommended_credentials(career_recommendations: List[Dict[str, Any]
         data = item.get("recommendation_data") if isinstance(item.get("recommendation_data"), dict) else item
         for credential in data.get("recommended_certifications") or []:
             name = _credential_name(credential)
-            if name and not any(credentials_equivalent(name, existing) for existing in output):
+            if not name or not _credential_has_authoritative_source(credential):
+                continue
+            if not any(credentials_equivalent(name, existing) for existing in output):
                 output.append(name)
     return output[:20]
 
@@ -84,21 +105,26 @@ def install_evidence_aware_report(app, resilient_llm_generate):
             request.courses,
             ["course_name", "provider", "status", "expected_completion_date"],
         )
+        allowed_credentials = _allowed_recommended_credentials(request.career_recommendations)
         careers = []
         for item in request.career_recommendations[:8]:
             if not isinstance(item, dict):
                 continue
             data = item.get("recommendation_data") if isinstance(item.get("recommendation_data"), dict) else {}
+            career_credentials = []
+            for credential in data.get("recommended_certifications") or item.get("recommended_certifications") or []:
+                name = _credential_name(credential)
+                if name and any(credentials_equivalent(name, allowed) for allowed in allowed_credentials):
+                    career_credentials.append(name)
             careers.append({
                 "title": item.get("path") or item.get("career_title") or data.get("path"),
                 "match_percentage": item.get("match_percentage") or data.get("match_percentage") or item.get("match_score"),
                 "matched_skills": item.get("matched_skills") or data.get("matched_skills") or [],
                 "missing_skills": item.get("missing_skills") or data.get("missing_skills") or [],
                 "match_reason": data.get("match_reason") or item.get("match_reason"),
-                "recommended_certifications": data.get("recommended_certifications") or item.get("recommended_certifications") or [],
+                "recommended_certifications": career_credentials,
             })
 
-        allowed_credentials = _allowed_recommended_credentials(request.career_recommendations)
         held_credentials = [
             _credential_name(item)
             for item in (evidence.get("certifications") or [])
@@ -120,7 +146,7 @@ EVIDENCE RULES:
 - For regulated careers, distinguish formal education, resume-listed license/credential evidence, and independently verified credentials.
 - Do not downgrade an experienced professional to entry level merely because a credential has not been uploaded separately to the verification store.
 - Do not invent credentials, education, experience, clinical competencies, technical competencies, professional associations, fellowships, boards, or certification names.
-- Recommended certifications may ONLY use names from ALLOWED RECOMMENDED CREDENTIALS below. If that list is empty, return an empty recommended_certifications list.
+- Recommended certifications may ONLY use names from ALLOWED RECOMMENDED CREDENTIALS below. If that list is empty, return an empty recommended_certifications list and describe development needs as training or specialty credentialing only if appropriate, without inventing a credential name.
 - Do not recommend a credential that is equivalent to one already held, even if the wording or acronym differs.
 - If Career Intelligence returns strong career matches, use those matches as the primary career paths rather than inventing unrelated alternatives.
 - Avoid recommending beginner training that duplicates evidence already present.
@@ -155,8 +181,7 @@ The regulated_roles_note should describe only requirements that are genuinely un
         response = await resilient_llm_generate(prompt, max_tokens_override=2400)
         advice = json.loads(response)
 
-        # Final deterministic guard: the report cannot introduce a credential name that
-        # the canonical recommendation pipeline did not already provide.
+        # Final deterministic guard: only source-backed canonical credential names survive.
         report_credentials = advice.get("recommended_certifications") or []
         filtered_credentials = []
         for item in report_credentials:
