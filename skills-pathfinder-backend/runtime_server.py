@@ -17,6 +17,7 @@ import generic_market_resolution as generic_market_module
 import market_intelligence as market_module
 from combined_resume_intelligence import install_combined_resume_intelligence
 from dynamic_career_discovery import discover_dynamic_careers, merge_recommendations
+from generic_catalog_stability import install_generic_domain_metadata
 from generic_market_resolution import install_generic_market_route
 from market_runtime_patch import install as install_market_runtime_patch
 from recommendation_cleanup import filter_existing_credentials
@@ -35,6 +36,7 @@ from final_demo_stability import install_bls_table_fallback, stabilize_current_p
 
 install_main_skill_patch(main_module)
 install_semantic_match_patch(blueprint_module, discovery_module)
+install_generic_domain_metadata(recommendation_module)
 install_current_role_catalog_preservation(recommendation_module)
 install_market_variants_patch(generic_market_module)
 install_combined_resume_intelligence(evidence_module, resilient_llm_generate)
