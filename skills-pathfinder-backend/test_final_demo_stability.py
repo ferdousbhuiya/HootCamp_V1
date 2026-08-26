@@ -1,46 +1,79 @@
 import final_demo_stability as demo
 
 
-def test_current_profession_score_is_stable_for_experienced_dentist():
-    profile = {"primary_profession": "General Dentist"}
+def test_same_resume_evidence_gets_same_current_profession_score_despite_blueprint_variance():
+    profile = {"primary_profession": "Head Baker"}
     structured = {
         "total_experience_years": 6.7,
-        "experience": [{"role": "General Dentist"}, {"role": "Associate Dentist"}],
+        "education": [{"program_or_degree": "Culinary Arts Diploma"}],
+        "experience": [{"role": "Head Baker", "skills_demonstrated": ["Food Safety", "Production Planning"]}],
     }
-    rows = [{
-        "path": "General Dentist",
+    extracted = [
+        {"name": "Bread Production"},
+        {"name": "Pastry Preparation"},
+        {"name": "Food Safety"},
+        {"name": "Inventory Control"},
+        {"name": "Production Planning"},
+        {"name": "Team Training"},
+    ]
+    first = [{
+        "path": "Head Baker",
         "candidate_relation": "current_profession",
-        "match_score": 0.775,
-        "matched_skills": ["A", "B", "C", "D", "E", "F"],
+        "match_score": 0.93,
+        "matched_skills": ["A"] * 8,
         "missing_skills": [],
     }]
-    out = demo.stabilize_current_profession(profile, structured, rows)
-    assert out[0]["match_percentage"] == 95.0
-    assert out[0]["readiness_stabilized"] is True
+    second = [{
+        "path": "Head Baker",
+        "candidate_relation": "current_profession",
+        "match_score": 0.61,
+        "matched_skills": ["A"] * 3,
+        "missing_skills": ["B", "C", "D"],
+    }]
+
+    out1 = demo.stabilize_current_profession(profile, structured, first, extracted)
+    out2 = demo.stabilize_current_profession(profile, structured, second, extracted)
+
+    assert out1[0]["match_percentage"] == out2[0]["match_percentage"] == 95.0
+    assert out1[0]["matched_skills"] == out2[0]["matched_skills"]
+    assert out1[0]["missing_skills"] == out2[0]["missing_skills"] == []
+    assert out1[0]["readiness_basis"]["method"] == "profession_agnostic_resume_evidence"
 
 
 def test_current_profession_stabilization_does_not_change_specialization():
-    profile = {"primary_profession": "General Dentist"}
-    structured = {"total_experience_years": 6.7, "experience": [{"role": "General Dentist"}]}
+    profile = {"primary_profession": "Head Baker"}
+    structured = {"total_experience_years": 6.7, "experience": [{"role": "Head Baker"}]}
     rows = [{
-        "path": "Endodontist",
+        "path": "Pastry Chef",
         "candidate_relation": "specialization",
         "match_score": 0.61,
         "match_percentage": 61.0,
         "matched_skills": ["A", "B", "C", "D"],
         "missing_skills": ["E"],
     }]
-    out = demo.stabilize_current_profession(profile, structured, rows)
+    out = demo.stabilize_current_profession(profile, structured, rows, [{"name": "Bread Production"}])
     assert out[0]["match_percentage"] == 61.0
 
 
-def test_extract_bls_row_from_official_table_format():
+def test_extract_bls_row_accepts_spaced_leader_dots():
     raw = """
     <pre>
-      Dentists, General............................................................. 124,390 91.99 191,350 82.19
+      Chefs and Head Cooks . . . . . . . .  180,000  31.25  65,000  29.00
     </pre>
     """
-    row = demo._extract_bls_row(raw, "Dentists, General")
-    assert row["employment"] == 124390
-    assert row["mean_annual_wage"] == 191350
-    assert row["mean_hourly_wage"] == 91.99
+    row = demo._extract_bls_row(raw, "Chefs and Head Cooks")
+    assert row["employment"] == 180000
+    assert row["mean_annual_wage"] == 65000
+    assert row["mean_hourly_wage"] == 31.25
+
+
+def test_generic_bls_title_match_does_not_require_profession_mapping():
+    raw = """
+    <pre>
+      Chefs and Head Cooks . . . . . . . .  180,000  31.25  65,000  29.00
+      Dentists, General . . . . . . . .  124,390  91.99  191,350  82.19
+    </pre>
+    """
+    records = demo.parse_bls_rows(raw)
+    row = demo._best_bls_row(records, "Chef")
+    assert row and row["occupation_title"] == "Chefs and Head Cooks"
