@@ -7,6 +7,7 @@ import evidence_server as evidence_module
 import market_intelligence as market_module
 import recommendation_engine as recommendation_module
 from final_stabilization import install_current_role_catalog_preservation
+from generic_catalog_stability import install_generic_domain_metadata
 from regulated_profession_support import install_regulated_profession_support
 
 
@@ -27,6 +28,7 @@ Education: Bachelor of Science in Nursing | Loyola University Chicago
 
 def _install_once():
     install_regulated_profession_support(evidence_module, recommendation_module, market_module)
+    install_generic_domain_metadata(recommendation_module)
     install_current_role_catalog_preservation(recommendation_module)
 
 
