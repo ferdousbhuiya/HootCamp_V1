@@ -44,6 +44,12 @@ ALIASES = {
     "security operations management": {"security operations oversight"},
 }
 
+_GENERIC_TITLE_WORDS = {
+    "senior", "junior", "lead", "principal", "staff", "associate", "assistant",
+    "manager", "management", "specialist", "coordinator", "director", "supervisor",
+    "officer", "consultant", "professional", "technician", "level", "grade",
+}
+
 
 def norm(value: Any) -> str:
     text = str(value or "").lower().replace("&", " and ")
@@ -74,8 +80,13 @@ def _stem_tokens(value: Any) -> set[str]:
     }
 
 
+def _title_tokens(value: Any) -> set[str]:
+    generic = {_stem_token(token) for token in _GENERIC_TITLE_WORDS}
+    return {token for token in _stem_tokens(value) if token not in generic}
+
+
 def _title_overlap(left: Any, right: Any) -> float:
-    a, b = _stem_tokens(left), _stem_tokens(right)
+    a, b = _title_tokens(left), _title_tokens(right)
     if not a or not b:
         return 0.0
     if a == b:
@@ -154,11 +165,12 @@ def filter_cross_domain(current_title: str, recommendations: Iterable[Dict[str, 
 
 
 def install_current_role_catalog_preservation(recommendation_module) -> None:
-    """Keep catalog careers supported by documented work-role titles.
+    """Keep catalog careers supported by meaningful documented role-title evidence.
 
-    The local catalog is a fallback. If a resume explicitly documents a role whose title
-    overlaps a catalog career, that career should not disappear merely because a specialty
-    outranks it. The rule is title/evidence based and contains no profession names.
+    Generic job-level words such as manager, specialist, assistant, or officer are ignored
+    when comparing titles. A meaningful occupation word shared with documented work history
+    is sufficient to preserve the catalog career; its displayed readiness still comes from
+    the normal evidence scorer. No profession names or profession-specific rules are used.
     """
     if getattr(recommendation_module, "_role_preservation_installed", False):
         return
@@ -184,8 +196,6 @@ def install_current_role_catalog_preservation(recommendation_module) -> None:
             if overlap < 0.50:
                 continue
             scoring = recommendation_module._score_career(extracted_skills, career, structured_evidence)
-            if float(scoring.get("match_score") or 0.0) < 0.15:
-                continue
             row = recommendation_module._career_result(career, scoring)
             row["documented_role_overlap"] = round(overlap, 3)
             supported.append(row)
@@ -197,8 +207,6 @@ def install_current_role_catalog_preservation(recommendation_module) -> None:
 
         merged = []
         merged_ids = set()
-        # Preserve every evidence-supported documented-role career up to the caller's
-        # requested result limit, then fill remaining slots with the normal ranking.
         for row in supported + results:
             key = str(row.get("id") or row.get("path") or "")
             if not key or key in merged_ids:
