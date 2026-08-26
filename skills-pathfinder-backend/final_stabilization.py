@@ -190,7 +190,12 @@ def install_current_role_catalog_preservation(recommendation_module) -> None:
         for career in getattr(recommendation_module, "CAREER_PATHS", []):
             if not isinstance(career, dict):
                 continue
-            overlap = max((_title_overlap(career.get("path"), role) for role in role_titles[:4]), default=0.0)
+            ranked_roles = sorted(
+                ((_title_overlap(career.get("path"), role), role) for role in role_titles[:4]),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            overlap, best_role = ranked_roles[0] if ranked_roles else (0.0, "")
             if overlap < 0.50:
                 continue
 
@@ -198,15 +203,15 @@ def install_current_role_catalog_preservation(recommendation_module) -> None:
             row = recommendation_module._career_result(career, scoring)
             row["documented_role_overlap"] = round(overlap, 3)
 
-            stable = documented_role_readiness(career.get("path") or "", evidence, extracted_skills)
+            # The overlap gate above already establishes that this catalog career is tied
+            # to documented work history. Score the stable evidence from the actual resume
+            # role title, not from a possibly broader/narrower catalog label.
+            stable = documented_role_readiness(best_role, evidence, extracted_skills)
             if stable:
                 try:
                     competency_ratio = max(0.0, min(1.0, float(row.get("competency_percentage") or 0.0) / 100.0))
                 except (TypeError, ValueError):
                     competency_ratio = 0.0
-                # Documented role/history carries 70% of the stable floor; catalog-specific
-                # competency agreement can add the remaining 30%. This preserves real work
-                # identity while still rewarding occupation-specific evidence.
                 role_floor = stable["score"] * (0.70 + 0.30 * competency_ratio)
                 current_score = float(row.get("match_score") or 0.0)
                 if role_floor > current_score:
@@ -222,6 +227,7 @@ def install_current_role_catalog_preservation(recommendation_module) -> None:
                     row["readiness_basis"] = {
                         "method": "profession_agnostic_documented_role_floor",
                         "documented_role_overlap": round(overlap, 3),
+                        "documented_role": best_role,
                         "experience_years": stable["experience_years"],
                         "resume_evidence_competencies": len(stable["evidence"]),
                         "catalog_competency_percentage": round(competency_ratio * 100, 1),
