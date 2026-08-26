@@ -1,13 +1,14 @@
 """Profession-agnostic final stability helpers for Skills Pathfinder.
 
-Resume extraction and dynamic career discovery remain generic. This module only makes
-current-profession readiness deterministic from resume evidence and makes the official
-BLS/OEWS table usable without per-profession title mappings.
+Resume extraction and dynamic career discovery remain generic. This module makes
+readiness for documented work roles deterministic from resume evidence and makes the
+official BLS/OEWS table usable without per-profession title mappings.
 """
 from __future__ import annotations
 
 import html
 import re
+from datetime import date
 from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -32,6 +33,8 @@ def _stem(token: str) -> str:
 def _title_tokens(value: Any) -> set[str]:
     stop = {
         "senior", "junior", "lead", "principal", "associate", "assistant", "staff",
+        "manager", "management", "specialist", "coordinator", "director", "supervisor",
+        "officer", "consultant", "professional", "technician",
         "the", "and", "of", "for", "in", "with", "level", "grade",
     }
     return {
@@ -41,20 +44,96 @@ def _title_tokens(value: Any) -> set[str]:
     }
 
 
-def _titles_overlap(left: Any, right: Any) -> bool:
+def _title_overlap_ratio(left: Any, right: Any) -> float:
     a, b = _title_tokens(left), _title_tokens(right)
     if not a or not b:
-        return False
+        return 0.0
     if a == b:
-        return True
-    return len(a & b) / max(1, min(len(a), len(b))) >= 0.60
+        return 1.0
+    return len(a & b) / max(1, min(len(a), len(b)))
+
+
+def _titles_overlap(left: Any, right: Any) -> bool:
+    return _title_overlap_ratio(left, right) >= 0.60
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if text in {"present", "current", "now"}:
+        return date.today()
+    months = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+    }
+    month_match = re.search(r"([a-z]{3,9})\s+(19\d{2}|20\d{2})", text)
+    if month_match and month_match.group(1) in months:
+        return date(int(month_match.group(2)), months[month_match.group(1)], 1)
+    year_match = re.search(r"(19\d{2}|20\d{2})", text)
+    return date(int(year_match.group(1)), 1, 1) if year_match else None
+
+
+def _months_between(start: date, end: date) -> set[tuple[int, int]]:
+    if end < start:
+        return set()
+    months = set()
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        months.add((year, month))
+        month += 1
+        if month == 13:
+            year += 1
+            month = 1
+    return months
+
+
+def _documented_role_years(title: str, structured: Dict[str, Any]) -> float:
+    months = set()
+    matching_roles = []
+    for item in (structured or {}).get("experience") or []:
+        if not isinstance(item, dict):
+            continue
+        if _title_overlap_ratio(title, item.get("role")) < 0.50:
+            continue
+        matching_roles.append(item)
+        start = _parse_date(item.get("start_date"))
+        end = _parse_date(item.get("end_date")) or date.today()
+        if start:
+            months.update(_months_between(start, end))
+
+    if months:
+        return round(len(months) / 12.0, 1)
+
+    # Some extraction paths already calculate non-overlapping total experience but do not
+    # preserve parseable role dates. Use that only when at least one role title matched.
+    if matching_roles:
+        try:
+            return max(0.0, float((structured or {}).get("total_experience_years") or 0.0))
+        except (TypeError, ValueError):
+            pass
+    return 0.0
 
 
 def _experience_years(structured: Dict[str, Any]) -> float:
     try:
-        return max(0.0, float((structured or {}).get("total_experience_years") or 0.0))
+        total = max(0.0, float((structured or {}).get("total_experience_years") or 0.0))
     except (TypeError, ValueError):
-        return 0.0
+        total = 0.0
+    if total:
+        return total
+
+    months = set()
+    for item in (structured or {}).get("experience") or []:
+        if not isinstance(item, dict):
+            continue
+        start = _parse_date(item.get("start_date"))
+        end = _parse_date(item.get("end_date")) or date.today()
+        if start:
+            months.update(_months_between(start, end))
+    return round(len(months) / 12.0, 1) if months else 0.0
 
 
 def _has_documented_role(title: str, structured: Dict[str, Any]) -> bool:
@@ -68,12 +147,7 @@ def _evidence_competencies(
     structured: Dict[str, Any],
     extracted_skills: Optional[Iterable[Dict[str, Any]]] = None,
 ) -> List[str]:
-    """Return a deterministic, deduplicated competency inventory from resume evidence.
-
-    The list is based only on extracted resume evidence, never on an AI career blueprint.
-    This means a repeated upload with the same extracted evidence gets the same readiness
-    inputs regardless of how the dynamic career model phrases a career competency list.
-    """
+    """Return a deterministic, deduplicated competency inventory from resume evidence."""
     output: List[str] = []
     seen = set()
 
@@ -106,32 +180,50 @@ def _evidence_competencies(
     return output
 
 
+def documented_role_readiness(
+    title: str,
+    structured: Dict[str, Any],
+    extracted_skills: Optional[Iterable[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return stable readiness for any occupation explicitly documented in work history.
+
+    No career catalog, profession dictionary, or AI-generated competency list is used.
+    The same evidence therefore produces the same result for any profession.
+    """
+    if not title or not _has_documented_role(title, structured):
+        return None
+
+    evidence = _evidence_competencies(structured, extracted_skills)
+    years = _documented_role_years(title, structured)
+    if years <= 0:
+        years = _experience_years(structured)
+    breadth_factor = min(1.0, len(evidence) / 8.0)
+    corroboration = bool((structured or {}).get("education") or (structured or {}).get("certifications"))
+
+    role_component = 0.55
+    experience_component = 0.20 * min(1.0, years / 5.0)
+    breadth_component = 0.20 * breadth_factor
+    corroboration_component = 0.05 if corroboration else 0.0
+    score = min(0.95, role_component + experience_component + breadth_component + corroboration_component)
+
+    return {
+        "score": round(score, 4),
+        "percentage": round(score * 100, 1),
+        "experience_years": round(years, 1),
+        "evidence": evidence,
+        "corroboration": corroboration,
+        "method": "profession_agnostic_documented_role_evidence",
+    }
+
+
 def stabilize_current_profession(
     profile: Dict[str, Any],
     structured: Dict[str, Any],
     recommendations: Iterable[Dict[str, Any]],
     extracted_skills: Optional[Iterable[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Score a documented current profession from stable resume evidence only.
-
-    This deliberately does not use the AI blueprint's core_competencies,
-    recommended_subjects, or domain_relevance_keywords. Those fields remain useful for
-    specialization and adjacent-career exploration, but must not make the same current
-    profession jump between percentages on repeated uploads.
-
-    Generic evidence model (no profession table):
-      55% documented current/recent role
-      20% sustained experience (full credit at 5 years)
-      20% evidence breadth (full credit at 8 distinct demonstrated competencies)
-       5% corroborating formal education or professional credential evidence
-
-    The score is capped at 95% because resume evidence is not independent verification.
-    """
+    """Replace AI-variable current-profession readiness with documented-role evidence."""
     rows = [dict(item) for item in recommendations or [] if isinstance(item, dict)]
-    years = _experience_years(structured)
-    evidence = _evidence_competencies(structured, extracted_skills)
-    breadth_factor = min(1.0, len(evidence) / 8.0)
-    corroboration = bool((structured or {}).get("education") or (structured or {}).get("certifications"))
 
     for row in rows:
         relation = _norm(row.get("candidate_relation")).replace(" ", "_")
@@ -144,25 +236,17 @@ def stabilize_current_profession(
             or (profile or {}).get("primary_profession")
             or ""
         ).strip()
-        if not title or not _has_documented_role(title, structured):
+        stable = documented_role_readiness(title, structured, extracted_skills)
+        if not stable:
             continue
 
-        role_component = 0.55
-        experience_component = 0.20 * min(1.0, years / 5.0)
-        breadth_component = 0.20 * breadth_factor
-        corroboration_component = 0.05 if corroboration else 0.0
-        score = min(
-            0.95,
-            role_component + experience_component + breadth_component + corroboration_component,
-        )
-
-        row["match_score"] = round(score, 4)
-        row["match_percentage"] = round(score * 100, 1)
+        score = stable["score"]
+        evidence = stable["evidence"]
+        years = stable["experience_years"]
+        row["match_score"] = score
+        row["match_percentage"] = stable["percentage"]
         row["skill_gap_percentage"] = round((1.0 - score) * 100, 1)
         row["matched_skills"] = evidence[:12]
-        # A generic engine cannot truthfully claim occupation-specific missing competencies
-        # without a verified occupation standard. Specialization/adjacent blueprints still
-        # expose explicit gaps; the current profession shows only demonstrated evidence.
         row["missing_skills"] = []
         row["matched_skill_details"] = [
             {
@@ -180,11 +264,11 @@ def stabilize_current_profession(
         )
         row["readiness_stabilized"] = True
         row["readiness_basis"] = {
-            "method": "profession_agnostic_resume_evidence",
+            "method": stable["method"],
             "documented_current_role": True,
             "demonstrated_competencies": len(evidence),
-            "experience_years": round(years, 1),
-            "corroborating_education_or_credentials": corroboration,
+            "experience_years": years,
+            "corroborating_education_or_credentials": stable["corroboration"],
         }
     return rows
 
@@ -198,8 +282,6 @@ def _clean_bls_text(raw_html: str) -> str:
 
 
 def _normalize_leader_dots(line: str) -> str:
-    # BLS uses both contiguous leaders (....) and spaced leaders (. . . .).
-    # Collapse runs of two or more leader dots without touching decimal points.
     return re.sub(r"(?:\s*\.\s*){2,}", " ", str(line or ""))
 
 
@@ -257,16 +339,12 @@ def _best_bls_row(records: Dict[str, Dict[str, Any]], title: str) -> Optional[Di
 
 
 def _extract_bls_row(raw_html: str, mapped_title: str):
-    """Backward-compatible single-title helper used by regression tests."""
     return _best_bls_row(parse_bls_rows(raw_html), mapped_title)
 
 
 def install_bls_table_fallback(market_module) -> None:
     """Install a generic official-table parser and fallback for any occupation title."""
     original_lookup = market_module.lookup_bls_market
-
-    # Make every existing consumer of market_module._bls_records benefit from the same
-    # robust parser, including generic O*NET/SOC resolution paths.
     market_module.parse_bls_oews_table = parse_bls_rows
 
     def lookup(career_title: str):
