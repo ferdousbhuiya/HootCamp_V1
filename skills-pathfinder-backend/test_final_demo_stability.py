@@ -1,4 +1,5 @@
 import final_demo_stability as demo
+from report_evidence_support import _gate_application_readiness, _same_career_title
 
 
 def test_same_resume_evidence_gets_same_current_profession_score_despite_blueprint_variance():
@@ -77,3 +78,42 @@ def test_generic_bls_title_match_does_not_require_profession_mapping():
     records = demo.parse_bls_rows(raw)
     row = demo._best_bls_row(records, "Chef")
     assert row and row["occupation_title"] == "Chefs and Head Cooks"
+
+
+def test_application_readiness_gate_moves_low_scoring_non_current_career():
+    advice = {
+        "application_readiness": {
+            "can_apply_now": ["Principal Analyst", "Director / Practice Lead (if experience aligns)"],
+            "prepare_before_applying": [],
+        }
+    }
+    careers = [
+        {"title": "Principal Analyst", "candidate_relation": "current_profession", "match_percentage": 95},
+        {"title": "Director / Practice Lead", "candidate_relation": "advancement_path", "match_percentage": 18},
+    ]
+
+    _gate_application_readiness(advice, careers)
+
+    assert advice["application_readiness"]["can_apply_now"] == ["Principal Analyst"]
+    assert advice["application_readiness"]["prepare_before_applying"] == ["Director / Practice Lead (if experience aligns)"]
+
+
+def test_application_readiness_gate_allows_generic_strong_non_current_career():
+    advice = {
+        "application_readiness": {
+            "can_apply_now": ["Risk Consultant"],
+            "prepare_before_applying": [],
+        }
+    }
+    careers = [
+        {"title": "Risk Consultant", "candidate_relation": "adjacent_opportunity", "match_percentage": 72},
+    ]
+
+    _gate_application_readiness(advice, careers)
+    assert advice["application_readiness"]["can_apply_now"] == ["Risk Consultant"]
+
+
+def test_report_career_title_matching_is_profession_neutral():
+    assert _same_career_title("Director / Practice Lead (if experience aligns)", "Director / Practice Lead")
+    assert _same_career_title("Senior Data Analyst positions", "Senior Data Analyst")
+    assert not _same_career_title("Security Manager", "Software Engineer")
